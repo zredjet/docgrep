@@ -889,6 +889,12 @@ fn snapshot_pretty_paragraph_and_small_context() {
 }
 
 #[test]
+fn snapshot_help() {
+    let dir = tempfile::tempdir().unwrap();
+    insta::assert_snapshot!(stdout_of(docgrep(dir.path()).arg("--help")));
+}
+
+#[test]
 fn help_is_japanese() {
     let dir = setup();
     docgrep(dir.path())

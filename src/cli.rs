@@ -16,9 +16,24 @@ const HELP_TEMPLATE: &str = "\
 
 const AFTER_HELP: &str = "\
 例:
-  docgrep サーバ 仕様書.docx          「サーバ」を含む箇所（「サーバー」も部分一致でヒット）
-  docgrep -e 'サーバ(?!ー)' docs/      「サーバー」を除外して検索
-  docgrep -- -foo .                   `-` で始まる語は `--` の後に書く
+  docgrep サーバ 仕様書.docx             「サーバ」を含む箇所（「サーバー」も部分一致でヒット）
+  docgrep -e 'サーバ(?!ー)' docs/        「サーバー」を除外して検索
+  docgrep -i ｓｅｒｖｅｒ docs/          全角英字の大文字小文字だけ同一視（半角 server は別）
+  docgrep --parts note,comment 要確認 .  脚注・文末脚注とコメントだけを検索
+  docgrep -c サーバ docs/                ファイルごとの件数
+  docgrep -- -foo .                      `-` で始まる語は `--` の後に書く
+
+--parts の値（カンマ区切りで複数指定可）:
+  body 本文 / table 表 / textbox テキストボックス / note 脚注・文末脚注 / comment コメント /
+  header ヘッダー・フッター / toc 目次 / all すべて（Excel には影響しません）
+
+補足:
+  - 対象: .docx .docm .dotx .dotm / .xlsx .xlsm .xltx .xltm .xlsb .xls .ods
+  - 表記ゆれ（全角半角・かなカナ・長音・Unicode 正規化・空白）は一切吸収しません
+  - grep と違い -e は PATTERN を取らず、-C は文字数、-P は段落全文表示です
+  - -l / -c / --json は同時に指定できません
+  - ページ p.12 は Word 保存時のレイアウト情報による推定、p.12+ は明示改ページだけから
+    数えた参考値（そのページ以降）です。-- はページのない箇所（ヘッダー・フッターなど）
 
 終了コード: 0 = ヒットあり、1 = ヒットなし、2 = エラーあり";
 
@@ -42,15 +57,15 @@ pub struct Cli {
     #[arg(value_name = "PATH", help_heading = "引数", display_order = 1)]
     pub paths: Vec<PathBuf>,
 
-    /// 大文字小文字を区別しない（全角半角・かなは区別したまま）
+    /// 大文字小文字を区別しない（全角半角・かなカナは区別したまま）
     #[arg(short = 'i', long)]
     pub ignore_case: bool,
 
-    /// PATTERN を正規表現として扱う（先読み・後読み可）
+    /// PATTERN を正規表現として扱う（fancy-regex 構文、先読み・後読み可）
     #[arg(short = 'e', long)]
     pub regex: bool,
 
-    /// マッチの前後に表示する文字数（既定: 30）
+    /// マッチの前後に表示する文字数（行数ではない。既定: 30）
     #[arg(
         short = 'C',
         long,
@@ -60,11 +75,11 @@ pub struct Cli {
     )]
     pub context: usize,
 
-    /// 前後を切り詰めず、段落（セル）全文を表示する
+    /// 前後を切り詰めず、段落（Excel はセル）の全文を表示する
     #[arg(short = 'P', long)]
     pub paragraph: bool,
 
-    /// Word の検索対象パート（カンマ区切り）: body, table, textbox, note, comment, header, toc, all（既定: all）
+    /// Word の検索対象パート（カンマ区切り、既定: all。値は下記参照）
     #[arg(
         long,
         value_name = "LIST",
@@ -86,7 +101,7 @@ pub struct Cli {
     #[arg(long)]
     pub json: bool,
 
-    /// 色付けする条件: auto（端末に出力していて NO_COLOR が未設定のときだけ）, always, never（既定: auto）
+    /// 色付け: auto（端末への出力で NO_COLOR 未設定のとき）/ always / never（既定: auto）
     #[arg(
         long,
         value_enum,
@@ -97,7 +112,7 @@ pub struct Cli {
     )]
     pub color: ColorWhen,
 
-    /// ディレクトリ探索の深さの上限
+    /// ディレクトリ探索の深さの上限（1 = 指定ディレクトリの直下だけ）
     #[arg(long, value_name = "N")]
     pub max_depth: Option<usize>,
 

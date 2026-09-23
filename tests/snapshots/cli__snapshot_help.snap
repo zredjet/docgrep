@@ -1,0 +1,48 @@
+---
+source: tests/cli.rs
+expression: "stdout_of(docgrep(dir.path()).arg(\"--help\"))"
+---
+Word / Excel ファイルの中身を厳密一致で検索します（表記ゆれの吸収はしません）
+
+使い方: docgrep [OPTIONS] <PATTERN> [PATH]...
+
+引数:
+  <PATTERN>  検索する文字列（`-` で始まる場合は `--` の後に書く）
+  [PATH]...  検索するファイルまたはディレクトリ（省略時はカレントディレクトリ）
+
+オプション:
+  -i, --ignore-case         大文字小文字を区別しない（全角半角・かなカナは区別したまま）
+  -e, --regex               PATTERN を正規表現として扱う（fancy-regex 構文、先読み・後読み可）
+  -C, --context <N>         マッチの前後に表示する文字数（行数ではない。既定: 30）
+  -P, --paragraph           前後を切り詰めず、段落（Excel はセル）の全文を表示する
+      --parts <LIST>        Word の検索対象パート（カンマ区切り、既定: all。値は下記参照）
+  -l, --files-with-matches  ヒットしたファイルのパスだけを表示する
+  -c, --count               ファイルごとのヒット数だけを「パス:件数」で表示する
+      --json                JSON Lines（1マッチ1行）で出力する
+      --color <WHEN>        色付け: auto（端末への出力で NO_COLOR 未設定のとき）/ always / never（既定: auto）
+      --max-depth <N>       ディレクトリ探索の深さの上限（1 = 指定ディレクトリの直下だけ）
+  -j, --threads <N>         並列数（既定: CPU 数。0 も既定と同じ）
+  -h, --help                ヘルプを表示する
+  -V, --version             バージョンを表示する
+
+例:
+  docgrep サーバ 仕様書.docx             「サーバ」を含む箇所（「サーバー」も部分一致でヒット）
+  docgrep -e 'サーバ(?!ー)' docs/        「サーバー」を除外して検索
+  docgrep -i ｓｅｒｖｅｒ docs/          全角英字の大文字小文字だけ同一視（半角 server は別）
+  docgrep --parts note,comment 要確認 .  脚注・文末脚注とコメントだけを検索
+  docgrep -c サーバ docs/                ファイルごとの件数
+  docgrep -- -foo .                      `-` で始まる語は `--` の後に書く
+
+--parts の値（カンマ区切りで複数指定可）:
+  body 本文 / table 表 / textbox テキストボックス / note 脚注・文末脚注 / comment コメント /
+  header ヘッダー・フッター / toc 目次 / all すべて（Excel には影響しません）
+
+補足:
+  - 対象: .docx .docm .dotx .dotm / .xlsx .xlsm .xltx .xltm .xlsb .xls .ods
+  - 表記ゆれ（全角半角・かなカナ・長音・Unicode 正規化・空白）は一切吸収しません
+  - grep と違い -e は PATTERN を取らず、-C は文字数、-P は段落全文表示です
+  - -l / -c / --json は同時に指定できません
+  - ページ p.12 は Word 保存時のレイアウト情報による推定、p.12+ は明示改ページだけから
+    数えた参考値（そのページ以降）です。-- はページのない箇所（ヘッダー・フッターなど）
+
+終了コード: 0 = ヒットあり、1 = ヒットなし、2 = エラーあり
