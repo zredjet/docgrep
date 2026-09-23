@@ -1,0 +1,9 @@
+---
+source: tests/cli.rs
+expression: "stdout_of(docgrep(dir.path()).args([\"--color\", \"always\", \"サーバ\",\n\"見積.xlsx\"]))"
+---
+[1m■ 見積.xlsx[0m  [2m2件[0m
+  [36m[内訳][0m [33mC14[0m
+        [1m[37m[41mサーバ[0m保守費用（年額）
+  [36m[旧版(非表示)][0m [33mB2[0m
+        旧[1m[37m[41mサーバ[0m[2m↵[0m廃止済み

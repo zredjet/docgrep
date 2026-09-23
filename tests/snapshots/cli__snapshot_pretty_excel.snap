@@ -1,0 +1,13 @@
+---
+source: tests/cli.rs
+expression: "stdout_of(docgrep(dir.path()).args([\"--color\", \"never\", \"サーバ\",\n\"仕様.docx\", \"見積.xlsx\"]))"
+---
+■ 仕様.docx  1件  (ページ: 明示改ページのみ・参考値)
+  p.1+  (冒頭)
+        サーバの一覧は見積.xlsxを参照
+
+■ 見積.xlsx  2件
+  [内訳] C14
+        サーバ保守費用（年額）
+  [旧版(非表示)] B2
+        旧サーバ↵廃止済み

@@ -8,8 +8,6 @@ pub enum FileError {
     EncryptedOrLegacy,
     #[error("未対応の形式です")]
     Unsupported,
-    #[error("Excel ファイルの検索はまだ実装されていません")]
-    ExcelNotYetSupported,
     #[error("ファイルが見つかりません")]
     NotFound,
     #[error("読み取れません: {0}")]
@@ -18,6 +16,8 @@ pub enum FileError {
     Zip(String),
     #[error("本文パートが見つかりません")]
     MissingMainPart,
+    #[error("Excel ファイルとして読めません: {0}")]
+    Excel(String),
     #[error("XML の解析に失敗しました ({part}): {message}")]
     Xml { part: String, message: String },
     #[error("検索中にエラーが発生しました: {0}")]
@@ -27,10 +27,7 @@ pub enum FileError {
 impl FileError {
     /// Warnings are reported but do not count as errors.
     pub fn is_warning(&self) -> bool {
-        matches!(
-            self,
-            FileError::EncryptedOrLegacy | FileError::Unsupported | FileError::ExcelNotYetSupported
-        )
+        matches!(self, FileError::EncryptedOrLegacy | FileError::Unsupported)
     }
 }
 

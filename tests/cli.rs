@@ -512,7 +512,104 @@ fn merged_entry_shows_page_of_first_match() {
     );
 }
 
+/// Workbook with a visible and a hidden sheet.
+fn workbook(dir: &Path, name: &str) {
+    let mut wb = rust_xlsxwriter::Workbook::new();
+    let ws = wb.add_worksheet().set_name("内訳").unwrap();
+    ws.write_string(0, 0, "項目").unwrap();
+    ws.write_string(13, 2, "サーバ保守費用（年額）").unwrap();
+    ws.write_number(13, 3, 1234.0).unwrap();
+    let ws = wb.add_worksheet().set_name("旧版").unwrap();
+    ws.set_hidden(true);
+    ws.write_string(1, 1, "旧サーバ\n廃止済み").unwrap();
+    wb.save(dir.join(name)).unwrap();
+}
+
+#[test]
+fn excel_json_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    workbook(dir.path(), "見積.xlsx");
+    let out = stdout_of(docgrep(dir.path()).args(["--json", "サーバ", "見積.xlsx"]));
+    let lines: Vec<serde_json::Value> = out
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    let v = &lines[0];
+    assert_eq!(v["file"], "見積.xlsx");
+    assert_eq!(v["format"], "excel");
+    assert_eq!(v["part"], "cell");
+    assert!(v["part_label"].is_null());
+    assert!(v["page"].is_null());
+    assert!(v["page_mode"].is_null());
+    assert!(v["heading"].is_null());
+    assert_eq!(v["sheet"], "内訳");
+    assert_eq!(v["sheet_hidden"], false);
+    assert_eq!(v["cell"], "C14");
+    assert_eq!(v["match"], "サーバ");
+    assert_eq!(v["after"], "保守費用（年額）");
+    assert_eq!(lines[1]["sheet"], "旧版");
+    assert_eq!(lines[1]["sheet_hidden"], true);
+    assert_eq!(lines[1]["cell"], "B2");
+}
+
+#[test]
+fn excel_numbers_are_searchable_without_display_format() {
+    let dir = tempfile::tempdir().unwrap();
+    workbook(dir.path(), "見積.xlsx");
+    docgrep(dir.path())
+        .args(["-c", "1234", "見積.xlsx"])
+        .assert()
+        .code(0)
+        .stdout("見積.xlsx:1\n");
+}
+
+#[test]
+fn word_and_excel_in_one_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    workbook(&docs, "b_見積.xlsx");
+    DocxBuilder::new()
+        .body(&p("サーバ"))
+        .write(&docs, "a_仕様.docx");
+    common::write_cfb(&docs, "c_暗号.xlsx");
+    let expected = ["docs/a_仕様.docx:1", "docs/b_見積.xlsx:2"]
+        .map(|s| Path::new(s).display().to_string() + "\n")
+        .concat();
+    docgrep(dir.path())
+        .args(["-c", "サーバ", "docs"])
+        .assert()
+        .code(0)
+        .stdout(expected)
+        .stderr(predicate::str::contains(
+            "暗号化または旧形式のため読めません",
+        ));
+}
+
 // --- snapshots -------------------------------------------------------------------------
+
+#[test]
+fn snapshot_pretty_excel() {
+    let dir = tempfile::tempdir().unwrap();
+    workbook(dir.path(), "見積.xlsx");
+    DocxBuilder::new()
+        .body(&p("サーバの一覧は見積.xlsxを参照"))
+        .write(dir.path(), "仕様.docx");
+    insta::assert_snapshot!(stdout_of(docgrep(dir.path()).args([
+        "--color",
+        "never",
+        "サーバ",
+        "仕様.docx",
+        "見積.xlsx"
+    ])));
+    insta::assert_snapshot!(stdout_of(docgrep(dir.path()).args([
+        "--color",
+        "always",
+        "サーバ",
+        "見積.xlsx"
+    ])));
+}
 
 #[test]
 fn snapshot_pretty_rendered_pages() {

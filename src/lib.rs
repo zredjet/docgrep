@@ -4,6 +4,7 @@
 
 pub mod cli;
 pub mod error;
+pub mod excel;
 pub mod matcher;
 pub mod model;
 pub mod output;
@@ -17,7 +18,7 @@ use anstream::{AutoStream, ColorChoice};
 use cli::{Cli, ColorWhen};
 use error::FileError;
 use matcher::Matcher;
-use model::{Extracted, Match};
+use model::{Format, Match, TextUnit};
 use output::{ContextOpts, FileHits};
 use walk::{Item, Kind, Target};
 
@@ -161,42 +162,78 @@ fn count_problem(stats: &mut Stats, error: &FileError) {
     }
 }
 
-/// Extracts and searches one file. Returns the hits (possibly partial) and any problem.
-fn process(target: &Target, matcher: &Matcher) -> (Option<FileHits>, Option<FileError>) {
-    let extracted = match target.kind {
-        Kind::Word => word::extract(&target.path),
-        Kind::Excel => Err(FileError::ExcelNotYetSupported),
-    };
-    let Extracted {
-        format,
-        page_mode,
-        units,
-        partial_error,
-    } = match extracted {
-        Ok(x) => x,
-        Err(e) => return (None, Some(e)),
-    };
-    let mut matches = Vec::new();
-    let mut error = partial_error;
-    for (unit_index, unit) in units.iter().enumerate() {
-        match matcher.find(&unit.text) {
-            Ok(found) => matches.extend(found.into_iter().map(|(start, end)| Match {
-                unit_index,
-                start,
-                end,
-            })),
+/// Search results of one file. Only units with matches are kept, so large files
+/// (Excel sheets in particular) do not stay in memory.
+struct Collector<'m> {
+    matcher: &'m Matcher,
+    units: Vec<TextUnit>,
+    matches: Vec<Match>,
+    error: Option<FileError>,
+}
+
+impl<'m> Collector<'m> {
+    fn new(matcher: &'m Matcher) -> Self {
+        Collector {
+            matcher,
+            units: Vec::new(),
+            matches: Vec::new(),
+            error: None,
+        }
+    }
+
+    /// Searches one unit. Returns false once searching has failed.
+    fn add(&mut self, unit: TextUnit) -> bool {
+        if self.error.is_some() {
+            return false;
+        }
+        match self.matcher.find(&unit.text) {
+            Ok(found) if found.is_empty() => true,
+            Ok(found) => {
+                let unit_index = self.units.len();
+                self.units.push(unit);
+                self.matches
+                    .extend(found.into_iter().map(|(start, end)| Match {
+                        unit_index,
+                        start,
+                        end,
+                    }));
+                true
+            }
             Err(e) => {
-                error = Some(FileError::Search(e.to_string()));
-                break;
+                self.error = Some(FileError::Search(e.to_string()));
+                false
             }
         }
     }
+}
+
+/// Extracts and searches one file. Returns the hits (possibly partial) and any problem.
+fn process(target: &Target, matcher: &Matcher) -> (Option<FileHits>, Option<FileError>) {
+    let mut collector = Collector::new(matcher);
+    let extracted = match target.kind {
+        Kind::Word => word::extract(&target.path).map(|x| {
+            for unit in x.units {
+                if !collector.add(unit) {
+                    break;
+                }
+            }
+            (x.format, x.page_mode, x.partial_error)
+        }),
+        Kind::Excel => excel::extract_with(&target.path, |unit| collector.add(unit))
+            .map(|partial| (Format::Excel, None, partial)),
+    };
+    let (format, page_mode, partial_error) = match extracted {
+        Ok(x) => x,
+        Err(e) => return (None, Some(e)),
+    };
+    // A search failure is reported in preference to a partial extraction error.
+    let error = collector.error.or(partial_error);
     let hits = FileHits {
         display: target.display.clone(),
         format,
         page_mode,
-        units,
-        matches,
+        units: collector.units,
+        matches: collector.matches,
     };
     (Some(hits), error)
 }
