@@ -42,8 +42,10 @@ src/
   word/
     mod.rs         docx 全体の流れ（パッケージを開く → 各パートを抽出）
     package.rs     zip、.rels 解決、暗号化判定
+    xml.rs         名前空間・属性・on/off の共通処理、補助パート用の要素ウォーカー
     styles.rs      スタイルチェーン解決（outlineLvl、numPr）
     numbering.rs   numbering.xml、カウンタ、numFmt 書式化
+    headings.rs    本文ストリームの見出し判定と章番号の追跡（HeadingTracker）
     extract.rs     ストリーミング抽出 → TextUnit 列
   excel.rs         calamine で読み TextUnit 列にする
   output/

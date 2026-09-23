@@ -1,21 +1,17 @@
-//! Streaming extraction of WordprocessingML paragraphs into text units (SPEC §6.3).
+//! Streaming extraction of WordprocessingML paragraphs into text units (SPEC §6.3),
+//! with headings attached to body-stream paragraphs (SPEC §6.5).
 
 use std::io::BufRead;
 
 use quick_xml::NsReader;
-use quick_xml::XmlVersion;
 use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 
+use super::headings::{DocContext, HeadingTracker, ParaProps};
+use super::xml::{MATH_STRICT, MATH_TRANSITIONAL, MC, is_w, w_attr};
 use crate::error::FileError;
 use crate::model::{Location, Part, TextUnit};
-
-const W_TRANSITIONAL: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-const W_STRICT: &str = "http://purl.oclc.org/ooxml/wordprocessingml/main";
-const MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
-const MATH_TRANSITIONAL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
-const MATH_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/math";
 
 /// Elements we react to. Everything else is descended into transparently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +28,8 @@ enum Tag {
     NoBreakHyphen,
     Sym,
     FldChar,
+    /// Paragraph properties: skipped for text, but a paragraph's own `w:pPr` is read.
+    PPr,
     /// `w:del` / `w:moveFrom`: text below is not part of the current revision.
     Deleted,
     TxbxContent,
@@ -41,10 +39,6 @@ enum Tag {
     /// deleted text, ruby text, `mc:Fallback`.
     Skip,
     Other,
-}
-
-fn is_w(ns: &str) -> bool {
-    ns == W_TRANSITIONAL || ns == W_STRICT
 }
 
 fn classify(ns: &ResolveResult, local: &str) -> Tag {
@@ -66,9 +60,10 @@ fn classify(ns: &ResolveResult, local: &str) -> Tag {
             "fldChar" => Tag::FldChar,
             "del" | "moveFrom" => Tag::Deleted,
             "txbxContent" => Tag::TxbxContent,
-            "pPr" | "rPr" | "tblPr" | "trPr" | "tcPr" | "sectPr" | "tblGrid" | "tblPrEx"
-            | "sdtPr" | "sdtEndPr" | "rubyPr" | "customXmlPr" | "smartTagPr" | "fldData"
-            | "instrText" | "delInstrText" | "delText" | "rt" => Tag::Skip,
+            "pPr" => Tag::PPr,
+            "rPr" | "tblPr" | "trPr" | "tcPr" | "sectPr" | "tblGrid" | "tblPrEx" | "sdtPr"
+            | "sdtEndPr" | "rubyPr" | "customXmlPr" | "smartTagPr" | "fldData" | "instrText"
+            | "delInstrText" | "delText" | "rt" => Tag::Skip,
             _ => Tag::Other,
         }
     } else if ns == MC {
@@ -122,6 +117,7 @@ struct TableCtx {
 #[derive(Debug, Default)]
 struct ParaBuilder {
     text: String,
+    props: ParaProps,
     /// Text box paragraphs anchored in this paragraph, emitted after it.
     anchored: Vec<TextUnit>,
 }
@@ -167,7 +163,13 @@ impl Story {
     }
 }
 
-struct Extractor {
+struct Extractor<'a> {
+    ctx: &'a DocContext,
+    headings: HeadingTracker,
+    /// Reading the current paragraph's own `w:pPr` (inside a skipped subtree).
+    in_ppr: bool,
+    /// Inside `w:pPr/w:numPr` of the current paragraph.
+    in_num_pr: bool,
     /// Main story at index 0, open text boxes above it.
     stories: Vec<Story>,
     frames: Vec<Frame>,
@@ -189,8 +191,12 @@ pub struct PartText {
 }
 
 /// Extracts every paragraph of a WordprocessingML part (document.xml etc.) in document order.
-pub fn extract_part<R: BufRead>(reader: R, part_name: &str) -> PartText {
+pub fn extract_part<R: BufRead>(reader: R, part_name: &str, ctx: &DocContext) -> PartText {
     let mut ex = Extractor {
+        ctx,
+        headings: HeadingTracker::default(),
+        in_ppr: false,
+        in_num_pr: false,
         stories: vec![Story::new(StoryKind::Main)],
         frames: Vec::new(),
         skip: 0,
@@ -207,6 +213,11 @@ pub fn extract_part<R: BufRead>(reader: R, part_name: &str) -> PartText {
             Ok((ns, event)) => match event {
                 Event::Start(e) => {
                     if ex.skip > 0 {
+                        if ex.in_ppr {
+                            let name = e.local_name();
+                            let local = w_local(&ns, name.as_ref());
+                            ex.ppr_child(&reader, &e, local, true);
+                        }
                         ex.skip += 1;
                     } else {
                         let tag = classify(&ns, e.local_name().as_ref());
@@ -218,17 +229,30 @@ pub fn extract_part<R: BufRead>(reader: R, part_name: &str) -> PartText {
                     }
                 }
                 Event::Empty(e) => {
-                    if ex.skip == 0 {
+                    if ex.skip > 0 {
+                        if ex.in_ppr {
+                            let name = e.local_name();
+                            let local = w_local(&ns, name.as_ref());
+                            ex.ppr_child(&reader, &e, local, false);
+                        }
+                    } else {
                         let tag = classify(&ns, e.local_name().as_ref());
                         let attrs = Attrs::read(&reader, &e, tag);
-                        if let Some(frame) = ex.start(tag, &attrs) {
-                            ex.end(frame);
+                        match ex.start(tag, &attrs) {
+                            Some(frame) => ex.end(frame),
+                            // An empty skipped element (e.g. `<w:pPr/>`) has no subtree.
+                            None => ex.in_ppr = false,
                         }
                     }
                 }
                 Event::End(_) => {
                     if ex.skip > 0 {
                         ex.skip -= 1;
+                        match ex.skip {
+                            0 => ex.in_ppr = false,
+                            1 => ex.in_num_pr = false,
+                            _ => {}
+                        }
                     } else if let Some(frame) = ex.frames.pop() {
                         ex.end(frame);
                     }
@@ -272,6 +296,14 @@ pub fn extract_part<R: BufRead>(reader: R, part_name: &str) -> PartText {
     PartText { units, error }
 }
 
+/// Local name of a WordprocessingML element; `None` for other namespaces.
+fn w_local<'n>(ns: &ResolveResult, local: &'n str) -> Option<&'n str> {
+    match ns {
+        ResolveResult::Bound(Namespace(n)) if is_w(n) => Some(local),
+        _ => None,
+    }
+}
+
 /// The few attribute values we need, read with namespace resolution.
 #[derive(Debug, Default)]
 struct Attrs {
@@ -283,37 +315,25 @@ struct Attrs {
 
 impl Attrs {
     fn read<R>(reader: &NsReader<R>, e: &BytesStart, tag: Tag) -> Attrs {
-        let wanted: &str = match tag {
-            Tag::Br => "type",
-            Tag::FldChar => "fldCharType",
-            Tag::Sym => "char",
-            _ => return Attrs::default(),
-        };
-        let mut out = Attrs::default();
-        for attr in e.attributes().flatten() {
-            let (ns, local) = reader.resolver().resolve_attribute(attr.key);
-            let in_w = match ns {
-                ResolveResult::Bound(Namespace(ns)) => is_w(ns),
-                ResolveResult::Unbound => true,
-                ResolveResult::Unknown(_) => false,
-            };
-            if !in_w || local.as_ref() != wanted {
-                continue;
-            }
-            let value = attr
-                .normalized_value(XmlVersion::Implicit1_0)
-                .map(|v| v.into_owned())
-                .ok();
-            match tag {
-                Tag::Sym => out.char_code = value,
-                _ => out.kind = value,
-            }
+        match tag {
+            Tag::Br => Attrs {
+                kind: w_attr(reader, e, "type"),
+                ..Attrs::default()
+            },
+            Tag::FldChar => Attrs {
+                kind: w_attr(reader, e, "fldCharType"),
+                ..Attrs::default()
+            },
+            Tag::Sym => Attrs {
+                char_code: w_attr(reader, e, "char"),
+                ..Attrs::default()
+            },
+            _ => Attrs::default(),
         }
-        out
     }
 }
 
-impl Extractor {
+impl Extractor<'_> {
     fn story(&mut self) -> Option<&mut Story> {
         self.stories.last_mut()
     }
@@ -341,10 +361,42 @@ impl Extractor {
         }
     }
 
+    /// Records `pStyle`, `outlineLvl` and `numPr` of the current paragraph's `w:pPr`.
+    /// `self.skip` is the depth below `w:pPr` (1 = direct child).
+    fn ppr_child<R>(
+        &mut self,
+        reader: &NsReader<R>,
+        e: &BytesStart,
+        local: Option<&str>,
+        is_start: bool,
+    ) {
+        let depth = self.skip;
+        let in_num_pr = self.in_num_pr;
+        let Some(para) = self.story().and_then(|st| st.paras.last_mut()) else {
+            return;
+        };
+        let val = || w_attr(reader, e, "val");
+        match (depth, local) {
+            (1, Some("pStyle")) => para.props.style = val(),
+            (1, Some("outlineLvl")) => para.props.outline_lvl = val().and_then(|v| v.parse().ok()),
+            (1, Some("numPr")) => self.in_num_pr = is_start,
+            (2, Some("numId")) if in_num_pr => {
+                para.props.num_id = val().and_then(|v| v.parse().ok());
+            }
+            (2, Some("ilvl")) if in_num_pr => para.props.ilvl = val().and_then(|v| v.parse().ok()),
+            _ => {}
+        }
+    }
+
     /// Handles an opening tag. Returns `None` if the subtree must be skipped.
     fn start(&mut self, tag: Tag, attrs: &Attrs) -> Option<Frame> {
         let frame = match tag {
             Tag::Skip => return None,
+            Tag::PPr => {
+                // Only a paragraph's own properties matter (not pPrChange etc.).
+                self.in_ppr = self.frames.last() == Some(&Frame::Paragraph);
+                return None;
+            }
             Tag::P => {
                 if let Some(st) = self.story() {
                     st.paras.push(ParaBuilder::default());
@@ -477,10 +529,23 @@ impl Extractor {
     }
 
     fn end_paragraph(&mut self) {
-        let Some(st) = self.story() else { return };
-        let Some(para) = st.paras.pop() else { return };
-        let unit = TextUnit::new(para.text, Location::new(st.part()));
-        st.out.push(unit);
+        let ctx = self.ctx;
+        let Some(st) = self.stories.last_mut() else {
+            return;
+        };
+        let Some(mut para) = st.paras.pop() else {
+            return;
+        };
+        let mut location = Location::new(st.part());
+        if st.kind == StoryKind::Main {
+            // Text boxes anchored here take the heading of their anchor paragraph.
+            let heading = self.headings.paragraph(ctx, &para.props, &para.text);
+            for unit in &mut para.anchored {
+                unit.location.heading = heading.clone();
+            }
+            location.heading = heading;
+        }
+        st.out.push(TextUnit::new(para.text, location));
         st.out.extend(para.anchored);
     }
 

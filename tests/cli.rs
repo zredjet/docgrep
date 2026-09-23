@@ -277,6 +277,8 @@ fn directory_is_walked_in_name_order_and_lock_files_skipped() {
         DocxBuilder::new().body(&p("サーバ")).write(&sub, name);
     }
     common::write_bytes(&sub, "memo.txt", b"x");
+    // macOS AppleDouble metadata files are not zip files; they are skipped silently.
+    common::write_bytes(&sub, "._a.docx", b"\x00\x05\x16\x07 AppleDouble");
     let expected = ["docs/a.docx", "docs/b.docx", "docs/sub/c.DOCX"]
         .map(|s| Path::new(s).display().to_string() + "\n")
         .concat();
@@ -390,7 +392,104 @@ fn json_has_no_color_even_when_forced() {
     assert!(!out.contains('\u{1b}'));
 }
 
+#[test]
+fn ignored_files_given_explicitly_are_skipped_silently() {
+    let dir = setup();
+    common::write_bytes(dir.path(), "._仕様書.docx", b"\x00\x05\x16\x07");
+    DocxBuilder::new()
+        .body(&p("サーバ"))
+        .write(dir.path(), "~$仕様書.docx");
+    docgrep(dir.path())
+        .args([
+            "-c",
+            "サーバ",
+            "._仕様書.docx",
+            "~$仕様書.docx",
+            "仕様書.docx",
+        ])
+        .assert()
+        .code(0)
+        .stdout("仕様書.docx:5\n")
+        .stderr("");
+}
+
+/// A document with numbered headings (styles use Japanese-Word-like ids).
+fn with_headings(dir: &Path, name: &str) {
+    let heading_style = |id: &str, lvl: u8| {
+        format!(
+            r#"<w:style w:type="paragraph" w:styleId="{id}"><w:name w:val="heading {}"/><w:pPr><w:numPr><w:ilvl w:val="{lvl}"/><w:numId w:val="1"/></w:numPr><w:outlineLvl w:val="{lvl}"/></w:pPr></w:style>"#,
+            lvl + 1
+        )
+    };
+    let styles = heading_style("1", 0) + &heading_style("2", 1) + &heading_style("3", 2);
+    let numbering = r#"<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1"/></w:lvl><w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2"/></w:lvl><w:lvl w:ilvl="2"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2.%3"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"#;
+    let h = |id: &str, text: &str| {
+        format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{id}"/></w:pPr>{}</w:p>"#,
+            r(text)
+        )
+    };
+    let body = [
+        p("サーバ構成資料"),
+        h("1", "はじめに"),
+        h("1", "システム"),
+        h("2", "概要"),
+        h("3", "システム構成"),
+        p("本システムではWebサーバとアプリケーションサーバを分離する。"),
+        format!("<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>", p("サーバ名")),
+        h(
+            "2",
+            "とても長い見出しの例としてサーバの冗長化と障害時の切り替え手順について",
+        ),
+        p("待機系サーバへ切り替える。"),
+    ]
+    .concat();
+    DocxBuilder::new()
+        .styles(&styles)
+        .numbering(numbering)
+        .body(&body)
+        .write(dir, name);
+}
+
+#[test]
+fn json_heading_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    with_headings(dir.path(), "見出し.docx");
+    let out = stdout_of(docgrep(dir.path()).args(["--json", "サーバ", "見出し.docx"]));
+    let lines: Vec<serde_json::Value> = out
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(lines[0]["heading"].is_null());
+    assert_eq!(
+        lines[1]["heading"],
+        serde_json::json!({"level": 3, "number": "2.1.1", "text": "システム構成"})
+    );
+    assert_eq!(lines[3]["part"], "table");
+    assert_eq!(lines[3]["heading"]["number"], "2.1.1");
+    assert_eq!(lines[4]["heading"]["level"], 2);
+    assert_eq!(lines[4]["heading"]["number"], "2.2");
+}
+
 // --- snapshots -------------------------------------------------------------------------
+
+#[test]
+fn snapshot_pretty_headings() {
+    let dir = tempfile::tempdir().unwrap();
+    with_headings(dir.path(), "見出し.docx");
+    insta::assert_snapshot!(stdout_of(docgrep(dir.path()).args([
+        "--color",
+        "never",
+        "サーバ",
+        "見出し.docx"
+    ])));
+    insta::assert_snapshot!(stdout_of(docgrep(dir.path()).args([
+        "--color",
+        "always",
+        "サーバ",
+        "見出し.docx"
+    ])));
+}
 
 #[test]
 fn snapshot_pretty_plain() {

@@ -36,11 +36,12 @@ pub fn kind_of(path: &Path) -> Option<Kind> {
     }
 }
 
-/// Office lock files (`~$name.docx`) are always skipped silently.
-fn is_lock_file(path: &Path) -> bool {
+/// Files that are always skipped silently: Office lock files (`~$name.docx`) and
+/// macOS AppleDouble metadata files (`._name.docx`).
+fn is_ignored_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n.starts_with("~$"))
+        .is_some_and(|n| n.starts_with("~$") || n.starts_with("._"))
 }
 
 /// Expands arguments in order. Directories are walked recursively in name order.
@@ -55,7 +56,7 @@ pub fn collect(paths: &[PathBuf], max_depth: Option<usize>) -> Vec<Item> {
                 display,
                 error: FileError::NotFound,
             });
-        } else if is_lock_file(path) {
+        } else if is_ignored_file(path) {
             continue;
         } else {
             match kind_of(path) {
@@ -82,7 +83,7 @@ fn walk_dir(root: &Path, max_depth: Option<usize>, items: &mut Vec<Item>) {
     for entry in walker {
         match entry {
             Ok(entry) => {
-                if !entry.file_type().is_file() || is_lock_file(entry.path()) {
+                if !entry.file_type().is_file() || is_ignored_file(entry.path()) {
                     continue;
                 }
                 let Some(kind) = kind_of(entry.path()) else {
@@ -133,9 +134,10 @@ mod tests {
     }
 
     #[test]
-    fn lock_files() {
-        assert!(is_lock_file(Path::new("dir/~$仕様書.docx")));
-        assert!(!is_lock_file(Path::new("dir/仕様書.docx")));
+    fn ignored_files() {
+        assert!(is_ignored_file(Path::new("dir/._仕様書.docx")));
+        assert!(is_ignored_file(Path::new("dir/~$仕様書.docx")));
+        assert!(!is_ignored_file(Path::new("dir/仕様書.docx")));
     }
 
     #[test]
