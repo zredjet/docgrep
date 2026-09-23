@@ -1,0 +1,7 @@
+---
+source: tests/cli.rs
+expression: "stdout_of(docgrep(dir.path()).args([\"--color\", \"never\", \"-P\", \"負荷\",\n\"仕様書.docx\"]))"
+---
+■ 仕様書.docx  1件
+  --    (冒頭)
+        本システムではWebサーバとアプリケーションサーバを分離し、負荷分散装置の配下に置く構成とする。

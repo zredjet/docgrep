@@ -32,7 +32,9 @@ Word / Excel ファイルの中身をコンソールから **厳密一致** で�
 
 ```
 src/
-  main.rs          エントリポイント、終了コード
+  main.rs          エントリポイント、終了コード（lib の薄いラッパー）
+  lib.rs           run(): walk → 抽出 → 検索 → 出力 の流れ、サマリ、終了コード
+  error.rs         FileError（ファイル単位の警告/エラー）
   cli.rs           clap 定義（help は日本語）
   walk.rs          パス展開（Windows 用 glob）、ディレクトリ再帰、スキップ規則
   model.rs         TextUnit / Location / Part / Heading / Match
@@ -45,6 +47,7 @@ src/
     extract.rs     ストリーミング抽出 → TextUnit 列
   excel.rs         calamine で読み TextUnit 列にする
   output/
+    mod.rs         文脈ウィンドウ、表示エントリのまとめ、char 単位スライス
     pretty.rs      カラー表示（anstream 経由）
     json.rs        JSON Lines
 tests/
