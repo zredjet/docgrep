@@ -40,6 +40,8 @@ const AFTER_HELP: &str = "\
 #[derive(Debug, Parser)]
 #[command(
     name = "docgrep",
+    // Same usage line on every OS (not "docgrep.exe" on Windows).
+    bin_name = "docgrep",
     version,
     about = "Word / Excel ファイルの中身を厳密一致で検索します（表記ゆれの吸収はしません）",
     help_template = HELP_TEMPLATE,

@@ -50,6 +50,11 @@ fn setup() -> TempDir {
     dir
 }
 
+/// A relative path written with `/`, as the OS prints it (`\` on Windows).
+fn native(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
 fn stdout_of(cmd: &mut assert_cmd::Command) -> String {
     String::from_utf8(cmd.output().unwrap().stdout).unwrap()
 }
@@ -280,7 +285,7 @@ fn directory_is_walked_in_name_order_and_lock_files_skipped() {
     // macOS AppleDouble metadata files are not zip files; they are skipped silently.
     common::write_bytes(&sub, "._a.docx", b"\x00\x05\x16\x07 AppleDouble");
     let expected = ["docs/a.docx", "docs/b.docx", "docs/sub/c.DOCX"]
-        .map(|s| Path::new(s).display().to_string() + "\n")
+        .map(|s| native(s) + "\n")
         .concat();
     docgrep(dir.path())
         .args(["-l", "サーバ", "docs"])
@@ -290,7 +295,7 @@ fn directory_is_walked_in_name_order_and_lock_files_skipped() {
         .stderr("");
     // Default path is the current directory, shown without "./".
     let expected = ["a.docx", "b.docx", "sub/c.DOCX"]
-        .map(|s| Path::new(s).display().to_string() + "\n")
+        .map(|s| native(s) + "\n")
         .concat();
     docgrep(&sub)
         .args(["-l", "サーバ"])
@@ -575,7 +580,7 @@ fn word_and_excel_in_one_directory() {
         .write(&docs, "a_仕様.docx");
     common::write_cfb(&docs, "c_暗号.xlsx");
     let expected = ["docs/a_仕様.docx:1", "docs/b_見積.xlsx:2"]
-        .map(|s| Path::new(s).display().to_string() + "\n")
+        .map(|s| native(s) + "\n")
         .concat();
     docgrep(dir.path())
         .args(["-c", "サーバ", "docs"])
