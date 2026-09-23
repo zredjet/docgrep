@@ -491,6 +491,7 @@ strip = true
 - [x] **P6 仕上げ**: README（日本語。インストール、使用例、§13 の既知の制約）、release プロファイル、help 文言の見直し
 - [ ] **P7 実ファイル検証と CI（任意）**: `tests/fixtures/real/` での照合と修正、GitHub Actions（Windows / macOS でテスト、リリースバイナリ作成）
       状況（2026-09-23）: 照合テスト（tests/real_files.rs）と GitHub Actions（ci.yml / release.yml）は作成済み。
+      GitHub Actions の CI は Windows / macOS（Apple Silicon・Intel）で成功し、v0.1.0 をリリースした。
       実ファイルでの照合（V1〜V5 の確認を含む）はユーザーが別途実施する。
 
 ---
