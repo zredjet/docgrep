@@ -1,0 +1,36 @@
+# 実ファイル検証用の期待値（ユーザーが記入する）
+#
+# 記入方法:
+#   1. Word でファイルを開き、Ctrl+F（Mac は Cmd+F）でキーワードを検索する
+#   2. ヒットした箇所のページ（ステータスバーの「ページ X / Y」の X）と、
+#      そこが属する見出し（番号＋見出し文字列）を書き写す
+#   3. 同じキーワードが複数ある場合は、文書の先頭から何番目かを nth に書く
+#
+# heading は前方一致で比較するので、長い見出しは先頭だけでよい。
+# 見出しより前の箇所は heading = "" にする。
+# part は body / table / textbox / toc / footnote / endnote / comment / header / footer / cell
+
+[[case]]
+file = "headings_pages.docx"
+pattern = "目印A"
+nth = 1
+page = 3
+heading = "2.1 システム構成"
+part = "body"
+
+[[case]]
+file = "headings_pages.docx"
+pattern = "目印B"   # 段落の途中でページが切り替わった直後に置いた語
+nth = 1
+page = 5
+heading = "3 運用"
+part = "body"
+
+# Excel は page と heading を書かず、sheet と cell を書く
+[[case]]
+file = "sample.xlsx"
+pattern = "保守費用"
+nth = 1
+sheet = "内訳"
+cell = "C14"
+part = "cell"

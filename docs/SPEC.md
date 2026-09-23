@@ -1,0 +1,515 @@
+# docgrep 仕様書
+
+本書が仕様の正。実装中に仕様にない判断をした場合は §14「決定ログ」に追記すること。
+
+---
+
+## 1. 目的・非目的
+
+### 目的
+- Word / Excel ファイル内を、コンソールから **厳密一致** で検索する。
+- ヒットごとに「ページ（推定）」「章番号＋見出し」「前後の文脈」「キーワード」をカラーでシンプルに表示する。
+- Windows / macOS で単一バイナリとして動く。Word・pandoc などの外部ソフトは不要。
+
+### 非目的（やらない）
+- あいまい検索・表記ゆれ吸収（全角半角、かなカナ、長音、異体字、Unicode 正規化）。**これを避けるのが本ツールの目的**。
+- 正確なページ番号の算出（レイアウトエンジンが必要なため不可能。§6.6 の推定で代替する）。
+- 旧形式 .doc の検索、ファイルの編集・置換。
+- PDF / PowerPoint（将来拡張の余地は残すが v1 では対象外）。
+
+---
+
+## 2. 対象ファイル
+
+| 種別 | 拡張子 | 読み方 |
+|---|---|---|
+| Word | .docx .docm .dotx .dotm | zip + XML を自前で解析 |
+| Excel | .xlsx .xlsm .xltx .xltm .xlsb .xls .ods | calamine |
+| 対象外 | .doc など上記以外 | 引数で直接指定されたときだけ警告。ディレクトリ探索中は無音でスキップ |
+
+Office のロックファイル（ファイル名が `~$` で始まる）は常に無音でスキップする。
+
+---
+
+## 3. CLI
+
+### 3.1 書式
+
+```
+docgrep [OPTIONS] <PATTERN> [PATH]...
+```
+
+- PATH はファイルまたはディレクトリ。複数指定可。省略時はカレントディレクトリ。
+- ディレクトリは再帰的に探索する。
+- Windows では `*` `?` を含む引数を自前で glob 展開する（cmd.exe / PowerShell はネイティブコマンドに展開しないため）。
+  その引数が実在パスならそのまま使う。展開結果が 0 件なら警告。
+- `-` で始まるパターンは `--` の後に書く（例: `docgrep -- -foo .`）。help に記載する。
+
+### 3.2 オプション
+
+| オプション | 説明 | 既定 |
+|---|---|---|
+| `-i, --ignore-case` | 大文字小文字を区別しない。Unicode の単純ケースフォールディングのみで、全角半角・かなは区別したまま | 区別する |
+| `-e, --regex` | PATTERN を正規表現（fancy-regex 構文、先読み・後読み可）として扱う | リテラル |
+| `-C, --context <N>` | マッチの前後に表示する文字数（char 単位） | 30 |
+| `-P, --paragraph` | 前後を切り詰めず、段落（セル）全文を表示する | off |
+| `--parts <LIST>` | Word の検索対象パートをカンマ区切りで指定。`body, table, textbox, note, comment, header, toc`、または `all` | all |
+| `-l, --files-with-matches` | ヒットしたファイルのパスだけを表示 | |
+| `-c, --count` | ファイルごとのヒット数だけを `パス:件数` で表示 | |
+| `--json` | JSON Lines（1マッチ1行）で出力。色なし | |
+| `--color <WHEN>` | `auto` / `always` / `never`。auto は TTY かつ `NO_COLOR` 未設定のときだけ色付け | auto |
+| `--max-depth <N>` | ディレクトリ探索の深さ上限 | 無制限 |
+| `-j, --threads <N>` | 並列数 | CPU 数 |
+| `-h, --help` / `-V, --version` | | |
+
+- `-l`、`-c`、`--json` は互いに排他（clap の `conflicts_with` で表現）。
+- `--parts` の対応: `note` = 脚注＋文末脚注、`header` = ヘッダー＋フッター。
+
+### 3.3 終了コード
+
+| コード | 意味 |
+|---|---|
+| 0 | 1件以上ヒットし、エラーなし |
+| 1 | ヒットなし、エラーなし |
+| 2 | エラーが1つ以上あった（ヒットの有無にかかわらず） |
+
+「警告」（暗号化ファイル、未対応形式、glob 0件）は終了コードに影響しない。
+「エラー」は壊れたファイル、読み取り不可、ロック中など。
+
+---
+
+## 4. 検索仕様
+
+### 4.1 一致規則
+- 本文テキストと PATTERN をそのまま比較する。正規化・トリム・空白の畳み込みはしない。
+- リテラルモードは `fancy_regex::escape` したパターンで正規表現エンジンに渡してよい（実装を一本化するため）。
+- `-i` は正規表現の `(?i)` 相当。全角の「Ａ」と「ａ」は一致するが、半角の「a」とは一致しない（仕様どおり）。
+- 検索単位は Word が段落、Excel がセル。段落やセルをまたぐ一致はしない。
+  段落内の改行（`w:br`）は `\n` として含まれるので、正規表現の `\n` でマッチできる。
+- マッチは左から非重複で列挙する（`find_iter` の標準動作）。
+- 空のパターンはエラー。不正な正規表現はエラーメッセージを出して終了コード 2。
+
+使用例（README にも載せる）:
+- `docgrep サーバ 仕様書.docx` → 「サーバ」「サーバー」「Webサーバ群」すべてヒットする（部分一致）。
+- `docgrep -e 'サーバ(?!ー)' 仕様書.docx` → 「サーバー」を除外できる。
+
+### 4.2 位置の扱い
+- 内部の位置はすべて char 単位。正規表現が返すバイト位置は char 位置に変換する。
+- 文字列のスライスは必ず char 境界で行う。
+
+---
+
+## 5. 出力
+
+### 5.1 通常表示
+
+```
+■ docs/仕様書.docx  4件  (ページ: Word保存時のレイアウト情報)
+  p.12  3.2.1 システム構成
+        …本システムではWebサーバとアプリケーションサーバを分離し…
+  p.12  3.2.1 システム構成  [表2 3行1列]
+        サーバ名↵役割
+  p.15  3.4 運用  [脚注3]
+        夜間バッチはサーバ停止時間帯を避けて実行する。
+  --    [ヘッダー]
+        社外秘 サーバ構成資料
+
+■ 見積.xlsx  1件
+  [内訳] C14
+        サーバ保守費用（年額）
+```
+
+stderr に出すサマリ（`-l` / `-c` / `--json` のときは出さない）:
+```
+検索 12ファイル / ヒット 2ファイル 5件 / スキップ 1 / エラー 0
+```
+
+レイアウト規則:
+- ファイル見出し行: `■ ` + パス（引数で渡された形のまま。ディレクトリ探索で見つけたものはその引数からの相対）+ 件数。
+  Word の場合はページ推定モード（§6.6）を括弧で付ける。
+- 位置行（Word）: 2スペース字下げ + ページ欄 + 見出し + パートラベル。
+  - ページ欄は幅 6 桁で左寄せ（`p.12  `）。長ければ伸ばす。ヘッダー/フッターは `--`。
+  - 見出しは `番号 見出し文字列`。番号が無ければ見出し文字列のみ。表示幅 40 桁を超えたら切り詰めて `…`。
+  - 最初の見出しより前の段落は見出し欄に `(冒頭)` を表示。
+- 位置行（Excel）: `[シート名] セル番地`。非表示シートは `[シート名(非表示)]`。
+- 文脈行: 8スペース字下げ + 文脈。
+  - 切り詰めた側に `…` を付ける（段落の先頭・末尾まで表示できた側には付けない）。
+  - `\n` は `↵`、`\t` は半角スペース1つに置換。その他の制御文字は除去。
+  - 同じ段落で複数マッチの表示範囲が重なる/接する場合は1エントリにまとめ、全マッチを強調する（件数はマッチ数で数える）。
+- ファイルとファイルの間は空行1行。
+- 表示幅の計算には unicode-width を使う。
+- 警告・エラーは stderr に `docgrep: 警告: <パス>: <理由>` / `docgrep: エラー: <パス>: <理由>` の形式で出す。
+
+### 5.2 色
+
+| 要素 | スタイル |
+|---|---|
+| `■` とファイルパス | 太字 |
+| 件数、ページモード、サマリ | dim |
+| ページ `p.12` | 黄 |
+| 見出し（番号＋文字列） | シアン |
+| パートラベル `[表2 3行1列]` など | マゼンタ |
+| シート名 / セル番地 | シアン / 黄 |
+| マッチ文字列 | 太字・白文字・赤背景 |
+| `…` `↵` `(冒頭)` `--` | dim |
+| 警告 / エラー（stderr） | 黄 / 赤 |
+
+- 基本16色のみ使う（256色・TrueColor は使わない）。端末テーマ依存で読みやすくするため。
+- すべて anstream 経由で出力する。`--color` の値は anstream の ColorChoice に反映する。
+
+### 5.3 JSON Lines（`--json`）
+
+1マッチ1行。表示上のまとめ（§5.1）は行わない。フィールド:
+
+| フィールド | 型 | 内容 |
+|---|---|---|
+| file | string | 表示と同じパス |
+| format | string | `word` / `excel` |
+| part | string | `body` `table` `textbox` `toc` `footnote` `endnote` `comment` `header` `footer` `cell` |
+| part_label | string or null | 表示用ラベル（例 `表2 3行1列`、`脚注3`） |
+| page | number or null | 推定ページ。Excel・ヘッダー・フッターは null |
+| page_mode | string or null | `rendered` / `explicit` / null |
+| heading | object or null | `{ "level": 3, "number": "3.2.1", "text": "システム構成" }`。number は無ければ null |
+| sheet | string or null | シート名 |
+| sheet_hidden | bool or null | 非表示シートなら true |
+| cell | string or null | `C14` |
+| before / match / after | string | 文脈（`-C` に従う。`-P` 時は段落全体を before/after に分割） |
+| offset | number | 段落/セル内のマッチ開始位置（char） |
+
+---
+
+## 6. Word 解析
+
+### 6.1 パッケージ
+- ファイル先頭が OLE (CFB) シグネチャ `D0 CF 11 E0 A1 B1 1A E1` の場合は、パスワード保護・IRM・または拡張子違いの .doc と判断し、
+  「暗号化または旧形式のため読めません」と警告してスキップする。
+- `_rels/.rels` の officeDocument リレーションから本文パート（通常 `word/document.xml`）を特定する。決め打ちしない。
+- 本文パートの .rels（通常 `word/_rels/document.xml.rels`）から styles、numbering、footnotes、endnotes、comments、header、footer を解決する。
+  存在しないパートは「無し」として扱う。
+- リレーションの Type URI は Transitional（`http://schemas.openxmlformats.org/officeDocument/2006/relationships/...`）と
+  Strict（`http://purl.oclc.org/ooxml/officeDocument/relationships/...`）の両方を受け付ける。
+- Target は .rels が属するパートのフォルダ基準の相対パス。`../` と先頭 `/`（パッケージルート基準）を正しく解決する。
+  `TargetMode="External"` は無視。
+
+### 6.2 XML の読み方
+- quick-xml の NsReader でストリーミング処理する（DOM を作らない）。
+- 要素・属性は「名前空間 URI + ローカル名」で判定する。接頭辞には依存しない。
+  - WordprocessingML: Transitional `http://schemas.openxmlformats.org/wordprocessingml/2006/main`、Strict `http://purl.oclc.org/ooxml/wordprocessingml/main`
+  - Markup Compatibility: `http://schemas.openxmlformats.org/markup-compatibility/2006`
+- on/off 型の属性・要素: 要素のみ（val 省略）、`true` `1` `on` は真、`false` `0` `off` は偽。
+- 実体参照（`&amp;` など）はアンエスケープする。
+
+### 6.3 テキスト抽出規則
+
+段落（`w:p`）ごとに1つの TextUnit を作る。段落テキストは下表の規則で run を結合したもの。
+
+| 要素 | 扱い |
+|---|---|
+| `w:t` | テキストとして追加 |
+| `w:tab`（run 内）、`w:ptab` | `\t` |
+| `w:br`（type 省略 / textWrapping / column）、`w:cr` | `\n` |
+| `w:br w:type="page"` | `\n` を追加し、明示改ページとして記録（§6.6） |
+| `w:noBreakHyphen` | `-`（U+002D） |
+| `w:softHyphen` | 何も追加しない |
+| `w:sym` | `w:char` の16進値の文字を追加（私用領域でもそのまま） |
+| `w:lastRenderedPageBreak` | テキストは追加しない。段落内の char 位置を記録（§6.6） |
+| `w:del`、`w:moveFrom` の配下（`w:delText` を含む） | 除外（変更履歴の削除側） |
+| `w:ins`、`w:moveTo` の配下 | 含める |
+| `w:instrText`、`w:delInstrText` | 除外（フィールドコード） |
+| `w:fldChar` begin〜separate の間 | 除外（フィールドコード） |
+| `w:fldChar` separate〜end の間 | 含める（フィールドの表示結果） |
+| `w:fldSimple` | 子の run を含める |
+| `w:hyperlink` `w:smartTag` `w:customXml` `w:sdt`/`w:sdtContent` | 子孫を再帰的に処理 |
+| `w:ruby` | `w:rubyBase` の中身だけ含め、`w:rt`（ルビ文字）は除外 |
+| `mc:AlternateContent` | `mc:Choice` だけ処理し、`mc:Fallback` は無視 |
+| `w:txbxContent` | 独立したテキストボックス段落として処理（外側の段落に混ぜない） |
+| `w:vanish`（隠し文字の書式） | 影響なし（隠し文字も検索対象） |
+| `w:footnoteReference` `w:endnoteReference` `w:commentReference` | テキストは追加しない。その時点のページ・見出しを id と紐付けて記録（§6.4） |
+| `w:pPr` `w:rPr` `w:tblPr` `w:trPr` `w:tcPr` `w:sectPr` などプロパティ要素の配下 | テキスト抽出の状態に一切影響させない |
+
+補足:
+- プロパティ要素の注意例: `w:pPr/w:tabs/w:tab` はタブ位置定義でありタブ文字ではない。`w:pPr/w:rPr/w:del` は段落記号の変更履歴であり削除範囲の開始ではない。
+- フィールド状態はスタックで管理する。begin で push（状態=コード）、separate で最上位を「結果」に変更、end で pop。
+  テキストを含めるのは「スタックが空」または「スタックの全要素が結果状態」のときだけ。
+  スタックは段落をまたいで保持する（目次フィールドなどは多数の段落にまたがる）。パートの終わりでリセット。
+- テキストボックスは段落の途中に入れ子で現れるため、段落スタックで処理する。
+  テキストボックス段落のページ・見出しは、アンカーとなった外側段落のその時点の値を使う。
+- VML の `w:pict/v:textbox/w:txbxContent` も（`mc:Fallback` 内でなければ）テキストボックスとして扱う。
+
+### 6.4 パートとラベル
+
+| part | 条件 | ラベル | ページ | 見出し |
+|---|---|---|---|---|
+| body | 本文の通常段落 | なし | 推定 | 直前の見出し |
+| table | `w:tbl` 内の段落 | `表N R行C列` | 推定 | 直前の見出し |
+| textbox | `w:txbxContent` 内の段落 | `テキストボックス` | アンカー段落のページ | アンカー時点の見出し |
+| toc | 段落スタイル名が `toc 1`〜`toc 9`（大小文字無視） | `目次` | 推定 | 直前の見出し |
+| footnote / endnote | footnotes.xml / endnotes.xml | `脚注N` / `文末脚注N`（N は w:id） | 参照位置のページ | 参照位置の見出し |
+| comment | comments.xml | `コメント: 作成者名` | 参照位置のページ | 参照位置の見出し |
+| header / footer | header*.xml / footer*.xml | `ヘッダー` / `フッター` | なし | なし |
+
+- 表番号 N は本文中の `w:tbl` の出現順の通し番号（入れ子の表も含む、1始まり）。R・C は最も内側の表の中での `w:tr`・`w:tc` の順番（1始まり、gridSpan は考慮しない）。
+- 脚注・文末脚注のうち `w:type` が `separator` `continuationSeparator` `continuationNotice` のものは除外。
+- 参照位置が本文中に見つからない脚注・コメントは、ページ・見出しなしで表示する。
+- ヘッダー/フッターは複数セクションで同じパートを使っていてもパートファイル単位で1回だけ検索する。
+- 本文 → 脚注・文末脚注 → コメント → ヘッダー → フッター の順に出力する。本文内は文書順。
+
+### 6.5 見出しと章番号
+
+#### (a) 見出しの判定
+本文ストリームの段落（表内を含む。テキストボックスと toc スタイルの段落は除く）について、アウトラインレベルを次の優先順で決める。
+
+1. 段落の `w:pPr/w:outlineLvl`
+2. 段落スタイルから `w:basedOn` をたどって最初に見つかった `w:pPr/w:outlineLvl`
+3. スタイル名（`w:name` の値）が `heading N`（大小文字無視、N=1〜9）なら N−1
+
+値 0〜8 を見出しレベル 1〜9 とする。9 または未定義は本文。
+
+- **styleId では判定しない**。日本語版 Word では styleId が `1` などになり、言語や作成環境で変わるため。組み込みスタイルの `w:name` は UI 言語に関係なく英語名（`heading 1`）で保存される。
+- 段落スタイル未指定のときは既定の段落スタイル（`w:style w:type="paragraph" w:default="1"`）を使う。
+- basedOn のたどりは循環に備えて深さ上限 20。
+
+#### (b) 番号の解決
+- numId と ilvl を、段落の `w:pPr/w:numPr` → スタイルチェーンの `w:pPr/w:numPr` の順で解決する。numId と ilvl は個別にフォールバックする。
+- `numId = 0` は「番号なし」（スタイル由来の番号を打ち消す）。
+- ilvl が解決できないとき: 対応する abstractNum の中で `w:lvl/w:pStyle` がこの段落の styleId と一致するレベル。それも無ければ 0。
+- numId → `w:num` → `w:abstractNumId` → `w:abstractNum`。
+  abstractNum に `w:numStyleLink` があれば、その名前の numbering スタイルの numPr の numId を経由して実体の abstractNum を解決する（1段のみ）。
+- `w:num/w:lvlOverride/w:lvl` があればそのレベル定義を上書き、`w:startOverride` があれば開始値を上書きする。
+- `w:start` 省略時は 0。
+
+#### (c) カウンタ
+- **番号付き段落はすべて（見出しでなくても）カウンタを進める**。章番号の確定・記録は見出し段落でのみ行う。
+- カウンタは abstractNumId ごとに保持する（Word は同じ abstractNum を指す別 numId でも番号を継続するため。**要検証 V2**）。
+- 各レベルのカウンタは「未使用」か「現在値」を持つ。
+- ある numId が初めて使われたとき、その num が startOverride を持つレベルのカウンタを「未使用」に戻し、以後そのレベルの開始値として startOverride を使う。
+- レベル L（0始まり）の段落が来たら:
+  1. レベル L が未使用なら開始値に、そうでなければ +1。
+  2. L より深い各レベル M をリセット（未使用に戻す）するか判定する。
+     M の `w:lvlRestart` 省略時は常にリセット。`0` ならリセットしない。`k`（1始まり）なら L < k のときリセット。
+- 上位レベルが未使用のまま下位レベルが使われた場合（いきなり 1.1 など）、上位は開始値として表示する。
+
+#### (d) 番号文字列
+- `w:lvlText` の `%1`〜`%9` を、レベル n−1 のカウンタをそのレベルの `w:numFmt` で書式化した文字列で置換する。
+- 当該レベルの `w:isLgl` が真なら、置換はすべて decimal で行う。
+- numFmt の対応:
+
+| numFmt | 1, 2, 3, 10 の例 |
+|---|---|
+| decimal | 1, 2, 3, 10 |
+| decimalZero | 01, 02, 03, 10 |
+| decimalFullWidth、decimalFullWidth2 | １, ２, ３, １０ |
+| upperRoman / lowerRoman | I, II, III, X / i, ii, iii, x |
+| upperLetter / lowerLetter | A, B, C, J / a, b, c, j（27 以降は AA, BB… と同じ文字を繰り返す） |
+| decimalEnclosedCircle | ①, ②, ③, ⑩（1〜50 は丸数字、それを超えたら decimal） |
+| aiueo / aiueoFullWidth | ｱ, ｲ, ｳ / ア, イ, ウ（五十音順で循環。**要検証 V3**） |
+| iroha / irohaFullWidth | ｲ, ﾛ, ﾊ / イ, ロ, ハ（いろは順で循環。**要検証 V3**） |
+| japaneseCounting | 一, 二, 三, 十（11=十一、20=二十、100=百） |
+| japaneseDigitalTenThousand、ideographDigital | 一, 二, 三, 一〇（桁ごとに漢数字） |
+| ideographTraditional | 甲, 乙, 丙…（10 で循環） |
+| ideographZodiac | 子, 丑, 寅…（12 で循環） |
+| bullet | 章番号として扱わない（番号なし） |
+| none | 空文字 |
+| 上記以外 | decimal にフォールバック |
+
+#### (e) 表示
+- `番号 見出し文字列`。番号が空なら見出し文字列のみ。
+- 見出し文字列は段落テキストの前後の空白を除いたもの（表示用のみ。検索には影響しない）。
+- 自動番号は段落テキストに含めない（Word の検索でも自動番号はヒットしないため、それと揃える）。
+
+### 6.6 ページ推定
+
+- ページは **物理ページ**（文書の先頭 = 1）。セクションごとのページ番号振り直しや、表紙を番号なしにする設定は反映しない。
+- 対象は本文ストリーム（表を含む）。テキストボックスはアンカー段落のページ、脚注・コメントは参照位置のページを使う。
+- モード判定: 本文中に `w:lastRenderedPageBreak` が1つでもあれば **rendered モード**、無ければ **explicit モード**。
+- rendered モード: `w:lastRenderedPageBreak` の出現ごとに +1。明示改ページは数えない。
+  （Word は明示改ページ後の新しいページの先頭にも lastRenderedPageBreak を書くという前提。**要検証 V1**）
+- explicit モード: 次のそれぞれで +1。
+  - `w:br w:type="page"`
+  - `w:pageBreakBefore` が真の段落（段落の先頭位置）
+  - 段落の `w:pPr/w:sectPr` で `w:type` が省略・`nextPage`・`oddPage`・`evenPage` のもの（その次の段落の先頭）
+- 改ページは段落内の char 位置として記録し、マッチの開始位置以前（位置 ≤ マッチ開始）にある改ページを数える。
+  1つの段落がページをまたぐことがあるため、段落単位で数えてはいけない。
+- `mc:Fallback` 内の改ページは数えない。
+- 表示: rendered は `p.12`、explicit は `p.12+`（自動改ページを数えられないため「12ページ目以降」の意味）。
+- ファイル見出し行の表示: rendered は `(ページ: Word保存時のレイアウト情報)`、explicit は `(ページ: 明示改ページのみ・参考値)`。
+
+---
+
+## 7. Excel 解析
+
+- calamine の `open_workbook_auto` で開く。
+- 全ワークシートを対象にする（チャートシート等は除く）。非表示・完全非表示のシートも対象にし、表示で `(非表示)` を付ける。
+- セル1つを TextUnit 1つとする。値の文字列化:
+
+| 型 | 文字列 |
+|---|---|
+| 文字列 | そのまま |
+| 整数 / 小数 | 整数値なら小数点なし（1234.0 → `1234`）、それ以外は Rust の最短表現 |
+| 真偽 | `TRUE` / `FALSE` |
+| 日時 | `YYYY-MM-DD`、時刻があれば `YYYY-MM-DD HH:MM:SS` |
+| エラー | `#N/A` などの Excel 表記 |
+| 空 | 対象外 |
+
+- 数式セルは保存時の計算結果（キャッシュ値）を検索する。数式の文字列そのものは v1 では検索しない。
+- 表示形式（桁区切り、通貨記号、日付書式）は反映しない。画面上「¥1,234」でも `1234` として扱う（既知の制約）。
+- セル番地: calamine の Range は開始位置のオフセットを持つので、`range.start()` の行・列を加算した絶対位置から `A1` 形式にする（列: A…Z, AA…）。
+- 走査順: シート順 → 行 → 列。
+- 図形・テキストボックス・コメント（メモ）は v1 では対象外。
+
+---
+
+## 8. ファイル探索・エラー処理
+
+- 引数のファイルは拡張子で種別を判定する（大小文字無視）。
+- ディレクトリは walkdir で再帰する。シンボリックリンクは辿らない。`.` で始まる隠しディレクトリはスキップ。
+- 出力順は決定的にする: 引数の順 → 各ディレクトリ内はパス名の昇順。並列処理（rayon）は可だが、出力はこの順に並べ直す。
+- 暗号化・旧形式（§6.1）: 警告してスキップ。
+- 壊れた zip / XML、読み取り権限なし、他プロセスによるロック: エラーとして stderr に出し、次のファイルへ進む。
+- XML が途中で壊れている場合でも、そこまでに抽出できた段落の検索結果は出してよい（エラーも併せて出す）。
+- どんな入力でも panic しない。
+
+---
+
+## 9. アーキテクチャ
+
+処理の流れ:
+
+```
+CLI 引数 → walk（対象ファイル列挙）
+        → 各ファイルを並列に: extractor（Word / Excel）→ Vec<TextUnit>
+                              → matcher → Vec<Match>
+        → 引数順に並べ直して output（pretty / json / -l / -c）
+```
+
+中核の型（名前・形は実装で調整してよいが、この分離は守る）:
+
+```rust
+pub struct TextUnit {
+    pub text: String,            // 段落またはセルの全文（§6.3 適用後）
+    pub location: Location,
+    pub page_breaks: Vec<usize>, // 段落内の改ページ位置（char）。Excel は空
+}
+
+pub struct Location {
+    pub part: Part,                  // Body / Table{index,row,col} / TextBox / Toc /
+                                     // Footnote{id} / Endnote{id} / Comment{author} /
+                                     // Header / Footer / Cell
+    pub page_at_start: Option<u32>,  // 段落開始時点のページ
+    pub page_mode: Option<PageMode>, // Rendered / Explicit
+    pub heading: Option<Heading>,    // { level, number: Option<String>, text }
+    pub sheet: Option<SheetRef>,     // { name, hidden }
+    pub cell: Option<String>,        // "C14"
+}
+
+pub struct Match {
+    pub unit_index: usize,
+    pub start: usize, // char
+    pub end: usize,   // char
+}
+```
+
+マッチのページ = `page_at_start` + `page_breaks` のうち `start` 以下の個数。
+
+---
+
+## 10. 使用クレート
+
+バージョンは `cargo add` で最新安定版を入れる。edition は 2024。
+
+| クレート | 用途 |
+|---|---|
+| clap（derive） | CLI 定義 |
+| zip | docx の展開（読み取りのみ） |
+| quick-xml | XML のストリーミング解析（NsReader） |
+| calamine | Excel 読み取り |
+| fancy-regex | 検索（リテラルもエスケープしてこれで統一） |
+| anstream、anstyle | 色出力（Windows コンソール対応、NO_COLOR 対応） |
+| unicode-width | 表示幅の計算 |
+| walkdir | ディレクトリ再帰 |
+| glob | Windows 用のワイルドカード展開 |
+| rayon | ファイル単位の並列処理 |
+| serde、serde_json | `--json` |
+| anyhow、thiserror | エラー処理 |
+| dev: assert_cmd、predicates、tempfile、insta、rust_xlsxwriter、toml | テスト |
+
+release プロファイル:
+
+```toml
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+```
+
+---
+
+## 11. テスト方針
+
+### フィクスチャ生成
+- `tests/common` に `DocxBuilder` を作る。document.xml の body 断片、styles.xml、numbering.xml、footnotes.xml などを文字列で受け取り、
+  最小構成の docx（`[Content_Types].xml`、`_rels/.rels`、`word/_rels/document.xml.rels` は自動生成）を tempdir に書き出す。
+- xlsx は rust_xlsxwriter で生成する（複数シート、数値、日付、数式、非表示シート、A1 から始まらない表）。
+
+### 必須テスト
+- §6.3 の表の各行に対応するテスト。特に:
+  - run 分割された「サー」「バ」が「サーバ」でヒットする
+  - 変更履歴の削除テキスト、フィールドコード、ルビ文字がヒットしない
+  - `mc:Fallback` のテキストボックスが二重にヒットしない
+  - テキストボックスの文字列が外側の段落に混ざらない
+  - `w:pPr/w:tabs/w:tab` がタブ文字にならない、`w:pPr/w:rPr/w:del` で以降が削除扱いにならない
+  - 接頭辞が `w:` 以外（例 `ns0:`）の XML でも読める
+- 章番号: 1 / 1.1 / 1.1.1 の多段、上位レベルに戻ったときのリセット、スタイル経由の numPr、numId=0、startOverride、lvlRestart、isLgl、
+  §6.5(d) の各 numFmt、styleId が `1` などの日本語版風のスタイル定義。
+- ページ: rendered（段落途中の改ページを含む）、explicit（`w:br` / pageBreakBefore / sectPr）、表内の改ページ、脚注の参照位置ページ。
+- 厳密一致: 「サーバ」と「サーバー」、全角と半角、`-i` で「Ａ」と「ａ」は一致・「a」と「Ａ」は不一致、NFC と NFD は不一致、`サーバ(?!ー)`。
+- Excel: セル番地（start オフセットあり）、数値の文字列化、日付、非表示シート。
+- CLI: 終了コード 0/1/2、`--json` の各フィールド、`--color never` で ANSI を含まない、`-l`、`-c`、`~$` のスキップ、暗号化ファイルの警告、
+  壊れた zip で他のファイルの処理が続く。
+- 表示: insta でスナップショット（`--color always` と `never` の両方）。
+
+### 実ファイル検証
+- `tests/fixtures/real/` に、ユーザーが Word / Excel 実機で保存したファイルと `expected.toml` を置く。
+- ディレクトリや expected.toml が無ければテストはスキップ扱い（失敗にしない）。
+- expected.toml の書式は同ディレクトリのテンプレートを参照。照合項目: ページ、見出し（前方一致）、part。
+
+---
+
+## 12. 実装フェーズ
+
+各フェーズの完了条件: `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` がすべて通り、このチェックを更新済みであること。
+
+- [ ] **P1 基盤**: プロジェクト作成、CLI 全オプション定義（§3。`--parts` は受け付けるだけで可）、検索（§4、`-i` `-e` `-C` `-P` `-l` `-c` 含む）、
+      docx の本文・表・テキストボックスの抽出（§6.1〜6.3）、pretty / JSON 出力（§5）。見出しとページの欄は空のままでよい。
+- [ ] **P2 章番号**（§6.5）
+- [ ] **P3 ページ推定**（§6.6）
+- [ ] **P4 Excel**（§7）
+- [ ] **P5 周辺パートと探索**: 脚注・文末脚注・コメント・ヘッダー・フッター・目次ラベル・`--parts`（§6.4）、ファイル探索とエラー処理（§8）
+- [ ] **P6 仕上げ**: README（日本語。インストール、使用例、§13 の既知の制約）、release プロファイル、help 文言の見直し
+- [ ] **P7 実ファイル検証と CI（任意）**: `tests/fixtures/real/` での照合と修正、GitHub Actions（Windows / macOS でテスト、リリースバイナリ作成）
+
+---
+
+## 13. 既知の制約（README に転記する）
+
+- ページは推定値。最後に Word で保存した環境のレイアウト情報に基づくため、フォントの違う環境や Word 以外のツールで保存したファイルではずれる。
+  また物理ページ（先頭=1）であり、文書に印刷されるページ番号とは一致しないことがある。
+- 自動番号（章番号・箇条書き番号）の文字列は検索できない（Word の検索と同じ）。
+- Excel の表示形式（桁区切り・通貨・日付書式）は反映しない。数式の文字列は検索しない。
+- .doc（旧形式）、パスワード付きファイルは非対応。
+- 変更履歴は「変更後」の内容で検索する（削除された文字は対象外）。
+- 図形内のテキストは Word のテキストボックスのみ対象。Excel の図形・メモは対象外。
+
+---
+
+## 14. 要検証事項・決定ログ
+
+### 要検証（実ファイルでユーザーに確認してもらう）
+- **V1**: Word 実機で保存したファイルで、明示改ページ（Ctrl+Enter）の後のページ先頭にも `w:lastRenderedPageBreak` が書かれるか。
+  書かれない場合は、rendered モードで「明示改ページの後、次の lastRenderedPageBreak より先に次の段落が始まったら +1」を追加する。
+- **V2**: 同じ abstractNum を参照する別 numId の段落の間で、番号が継続するか（§6.5(c) の前提）。
+- **V3**: aiueo / iroha 系 numFmt の文字の並びと循環の仕方が Word の表示と一致するか。
+- **V4**: Mac 版 Word で保存したファイルにも `w:lastRenderedPageBreak` が書かれるか。
+
+### 決定ログ
+（実装中に、仕様にない判断をしたら日付と1行で追記する）
