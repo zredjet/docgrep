@@ -32,6 +32,8 @@ Word / Excel ファイルの中身をコンソールから **厳密一致** で�
 - ワークフローの検査: `actionlint`
 
 フェーズ完了時は `cargo fmt --check`、clippy、test がすべて通っていること。
+CI は最新の stable で clippy を実行する。手元の既定ツールチェーンが古いと新しい lint を見逃すので、
+push 前に最新の stable でも確認する（例: `cargo +1.98.1 clippy --all-targets -- -D warnings`）。
 
 ## ソース構成
 

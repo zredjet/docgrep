@@ -238,10 +238,14 @@ fn percent_decode(s: &str) -> String {
 }
 
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> Vec<u8> {
-    let units = bytes.chunks_exact(2).skip(1).map(|c| match c {
-        [a, b] if big_endian => u16::from_be_bytes([*a, *b]),
-        [a, b] => u16::from_le_bytes([*a, *b]),
-        _ => 0xFFFD,
+    // Skip the BOM; a trailing odd byte is dropped.
+    let (pairs, _) = bytes.as_chunks::<2>();
+    let units = pairs.iter().skip(1).map(|&pair| {
+        if big_endian {
+            u16::from_be_bytes(pair)
+        } else {
+            u16::from_le_bytes(pair)
+        }
     });
     char::decode_utf16(units)
         .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
