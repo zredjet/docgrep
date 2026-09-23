@@ -34,6 +34,25 @@ docgrep は全角半角・ひらがなカタカナ・長音・Unicode 正規化�
 `docgrep`（Windows では `docgrep.exe`）を、PATH の通ったフォルダに置くだけで使えます。
 ほかにインストールするものはありません。
 
+配布用の圧縮ファイルの名前は `docgrep-<バージョン>-<ターゲット>` です（Windows は `.zip`、macOS は `.tar.gz`）。
+
+| ターゲット | 対象 |
+|---|---|
+| `x86_64-pc-windows-msvc` | Windows（一般的な Intel / AMD の PC） |
+| `aarch64-pc-windows-msvc` | Windows（ARM 版） |
+| `aarch64-apple-darwin` | macOS（Apple Silicon） |
+| `x86_64-apple-darwin` | macOS（Intel） |
+
+圧縮ファイルには、実行ファイルのほか `README.md`、`LICENSE`、`THIRD_PARTY_LICENSES.md` が入っています。
+
+配布している実行ファイルには、コード署名をしていません。そのため初回の実行時に警告が出ることがあります。
+- **Windows**: 「Windows によって PC が保護されました」と出たら、「詳細情報」→「実行」を選びます。
+- **macOS**: 「開発元を検証できません」と出たら、次のコマンドでダウンロード時の隔離属性を外します。
+
+  ```sh
+  xattr -d com.apple.quarantine ./docgrep
+  ```
+
 ### ソースからビルドする場合
 
 [Rust](https://www.rust-lang.org/ja/tools/install) 1.88 以降が必要です。
@@ -240,5 +259,17 @@ cargo fmt
   cargo about generate --locked about.hbs -o THIRD_PARTY_LICENSES.md
   ```
 
+- **実ファイル検証**: Word / Excel で実際に保存したファイルを `tests/fixtures/real/` に置き、同じフォルダの `expected.toml` に期待値を書きます。
+  - 期待値はページ・見出し・パート、Excel の場合はシート・セルです。書き方はファイル内のコメントにあります。
+  - 次のコマンドで照合します。ファイルが置かれていないケースはスキップされます。
+
+  ```sh
+  cargo test --test real_files -- --nocapture
+  ```
+
+- **リリース**: 次の手順で公開します。
+  1. Cargo.toml の `version` を上げてコミットします。
+  2. `v0.1.0` の形式のタグを push します。GitHub Actions が4ターゲットの圧縮ファイルを作り、下書きの Release を作成します。
+  3. 下書きを確認してから公開します。
 - テスト用の docx は `tests/common` の `DocxBuilder` で XML 断片から生成します。xlsx は rust_xlsxwriter で生成します。
 - 表示はスナップショットテストで固定しています。表示を意図して変えたときは `INSTA_UPDATE=always cargo test`（または cargo-insta を入れて `cargo insta review`）で更新し、差分を確認してください。

@@ -1,0 +1,7 @@
+# Keep LF everywhere so that snapshots and fixtures compare equal on Windows.
+* text=auto eol=lf
+*.docx binary
+*.xlsx binary
+*.xls binary
+*.xlsb binary
+*.ods binary

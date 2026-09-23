@@ -27,6 +27,9 @@ Word / Excel ファイルの中身をコンソールから **厳密一致** で�
 - Lint: `cargo clippy --all-targets -- -D warnings`
 - 整形: `cargo fmt`
 - 手動確認: `cargo run -- <PATTERN> <PATH>...`
+- 実ファイル照合: `cargo test --test real_files -- --nocapture`（`tests/fixtures/real/` にファイルが無いケースはスキップ）
+- Windows 向けの確認（macOS 上で）: `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
+- ワークフローの検査: `actionlint`
 
 フェーズ完了時は `cargo fmt --check`、clippy、test がすべて通っていること。
 

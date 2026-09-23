@@ -490,6 +490,8 @@ strip = true
 - [x] **P5 周辺パートと探索**: 脚注・文末脚注・コメント・ヘッダー・フッター・目次ラベル・`--parts`（§6.4）、ファイル探索とエラー処理（§8）
 - [x] **P6 仕上げ**: README（日本語。インストール、使用例、§13 の既知の制約）、release プロファイル、help 文言の見直し
 - [ ] **P7 実ファイル検証と CI（任意）**: `tests/fixtures/real/` での照合と修正、GitHub Actions（Windows / macOS でテスト、リリースバイナリ作成）
+      状況（2026-09-23）: 照合テスト（tests/real_files.rs）と GitHub Actions（ci.yml / release.yml）は作成済み。
+      実ファイルの提供と、リモートリポジトリでの CI 実行を待っている。V1〜V5 の確認もこの照合で行う。
 
 ---
 
@@ -600,6 +602,14 @@ P6 で決めたもの:
 - 2026-09-23 anyhow は使う場面が無かったため依存から外した（エラーは thiserror の FileError で表す）。
 - 2026-09-23 rust-version は 1.88（edition 2024 の let-chains と、calamine・zip の要求に合わせる）。
 - 2026-09-23 help は1オプション1行に収め、`--parts` の値の一覧・grep との違い（C9）・ページ表示の意味は末尾の補足に書く。help の文面はスナップショットで固定する。
+
+P7 で決めたもの:
+- 2026-09-23 実ファイル照合は expected.toml の各ケースについて、パターンのリテラル一致の nth 番目（本文→脚注→…の抽出順）を照合する。
+  heading は「番号 見出し」の前方一致で、空文字は「最初の見出しより前」。ファイルの無いケースはスキップし、テストは成功扱い。
+- 2026-09-23 CI: fmt と、ライセンス一覧が最新かを ubuntu で確認する。clippy とテストは windows-latest・macos-latest（Apple Silicon）・macos-15-intel で行い、MSRV（1.88）では cargo check を行う。
+- 2026-09-23 リリース: v* タグで macOS arm64/x64・Windows x64/arm64 をビルドし、実行ファイル・README・LICENSE・THIRD_PARTY_LICENSES.md を
+  zip（Windows）/ tar.gz（macOS）にまとめ、SHA-256 を添えて下書きの GitHub Release にする。タグと Cargo.toml の version が違えば失敗させる。コード署名はしない。
+- 2026-09-23 Windows のチェックアウトで改行が CRLF に変わってスナップショットが崩れないよう、.gitattributes で LF に固定する。
 
 ライセンス:
 - 2026-09-23 docgrep は MIT ライセンス（LICENSE、Cargo.toml の license）。crates.io には公開しない（publish = false）。
