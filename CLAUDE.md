@@ -33,7 +33,7 @@ Word / Excel ファイルの中身をコンソールから **厳密一致** で�
 ```
 src/
   main.rs          エントリポイント、終了コード（lib の薄いラッパー）
-  lib.rs           run(): walk → 抽出 → 検索 → 出力 の流れ、サマリ、終了コード
+  lib.rs           run(): walk → 抽出 → 検索（rayon で並列、出力は引数順に並べ直す）、サマリ、終了コード
   error.rs         FileError（ファイル単位の警告/エラー）
   cli.rs           clap 定義（help は日本語）
   walk.rs          パス展開（Windows 用 glob）、ディレクトリ再帰、スキップ規則

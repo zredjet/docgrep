@@ -22,12 +22,24 @@ impl Format {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Part {
     Body,
-    Table { index: u32, row: u32, col: u32 },
+    Table {
+        index: u32,
+        row: u32,
+        col: u32,
+    },
     TextBox,
     Toc,
-    Footnote { id: String },
-    Endnote { id: String },
-    Comment { author: String },
+    Footnote {
+        id: String,
+    },
+    Endnote {
+        id: String,
+    },
+    /// `id` links the comment to its reference in the body; only `author` is shown.
+    Comment {
+        id: String,
+        author: String,
+    },
     Header,
     Footer,
     Cell,
@@ -59,7 +71,8 @@ impl Part {
             Part::Toc => Some("目次".to_string()),
             Part::Footnote { id } => Some(format!("脚注{id}")),
             Part::Endnote { id } => Some(format!("文末脚注{id}")),
-            Part::Comment { author } => Some(format!("コメント: {author}")),
+            Part::Comment { author, .. } if author.is_empty() => Some("コメント".to_string()),
+            Part::Comment { author, .. } => Some(format!("コメント: {author}")),
             Part::Header => Some("ヘッダー".to_string()),
             Part::Footer => Some("フッター".to_string()),
         }
@@ -68,6 +81,14 @@ impl Part {
     /// Header and footer paragraphs have no page or heading.
     pub fn is_page_less(&self) -> bool {
         matches!(self, Part::Header | Part::Footer)
+    }
+
+    /// Footnotes, endnotes and comments take page and heading from their reference.
+    pub fn is_note(&self) -> bool {
+        matches!(
+            self,
+            Part::Footnote { .. } | Part::Endnote { .. } | Part::Comment { .. }
+        )
     }
 }
 

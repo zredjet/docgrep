@@ -587,7 +587,208 @@ fn word_and_excel_in_one_directory() {
         ));
 }
 
+/// A document with every Word part kind containing "サーバ".
+fn all_parts(dir: &Path, name: &str) {
+    let styles = r#"<w:style w:type="paragraph" w:styleId="1"><w:name w:val="heading 1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="toc1"><w:name w:val="toc 1"/></w:style>"#;
+    let sp = |style: &str, text: &str| {
+        format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr>{}</w:p>"#,
+            r(text)
+        )
+    };
+    let body = [
+        sp("toc1", "1 サーバ構成\t1"),
+        sp("1", "サーバ構成"),
+        format!(
+            r#"<w:p>{}<w:r><w:footnoteReference w:id="3"/></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p>"#,
+            r("本文のサーバ")
+        ),
+        format!("<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>", p("表のサーバ")),
+        format!(
+            r#"<w:p><w:r><w:pict><v:textbox><w:txbxContent>{}</w:txbxContent></v:textbox></w:pict></w:r></w:p>"#,
+            p("箱のサーバ")
+        ),
+    ]
+    .concat();
+    DocxBuilder::new()
+        .styles(styles)
+        .body(&body)
+        .footnotes(r#"<w:footnote w:id="3"><w:p><w:r><w:t>脚注のサーバ</w:t></w:r></w:p></w:footnote><w:footnote w:id="5"><w:p><w:r><w:t>参照のないサーバ</w:t></w:r></w:p></w:footnote>"#)
+        .endnotes(r#"<w:endnote w:id="1"><w:p><w:r><w:t>文末のサーバ</w:t></w:r></w:p></w:endnote>"#)
+        .comments(r#"<w:comment w:id="0" w:author="山田"><w:p><w:r><w:t>コメントのサーバ</w:t></w:r></w:p></w:comment>"#)
+        .header(&p("ヘッダーのサーバ"))
+        .footer(&p("フッターのサーバ"))
+        .write(dir, name);
+}
+
+#[test]
+fn parts_option_filters_word_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    all_parts(dir.path(), "全部.docx");
+    workbook(dir.path(), "見積.xlsx");
+    let count = |parts: &str| {
+        stdout_of(docgrep(dir.path()).args([
+            "-c",
+            "--parts",
+            parts,
+            "サーバ",
+            "全部.docx",
+            "見積.xlsx",
+        ]))
+    };
+    assert_eq!(count("all"), "全部.docx:11\n見積.xlsx:2\n");
+    assert_eq!(count("body"), "全部.docx:2\n見積.xlsx:2\n");
+    assert_eq!(count("toc"), "全部.docx:1\n見積.xlsx:2\n");
+    assert_eq!(count("table"), "全部.docx:1\n見積.xlsx:2\n");
+    assert_eq!(count("textbox"), "全部.docx:1\n見積.xlsx:2\n");
+    assert_eq!(count("note"), "全部.docx:3\n見積.xlsx:2\n");
+    assert_eq!(count("comment"), "全部.docx:1\n見積.xlsx:2\n");
+    assert_eq!(count("header"), "全部.docx:2\n見積.xlsx:2\n");
+    assert_eq!(count("body,header"), "全部.docx:4\n見積.xlsx:2\n");
+}
+
+#[test]
+fn json_part_names_for_all_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    all_parts(dir.path(), "全部.docx");
+    let out = stdout_of(docgrep(dir.path()).args(["--json", "サーバ", "全部.docx"]));
+    let parts: Vec<(String, serde_json::Value)> = out
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .map(|v| {
+            (
+                v["part"].as_str().unwrap().to_string(),
+                v["part_label"].clone(),
+            )
+        })
+        .collect();
+    let names: Vec<_> = parts.iter().map(|p| p.0.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "toc", "body", "body", "table", "textbox", "footnote", "footnote", "endnote",
+            "comment", "header", "footer"
+        ]
+    );
+    assert_eq!(parts[5].1, "脚注3");
+    assert_eq!(parts[7].1, "文末脚注1");
+    assert_eq!(parts[8].1, "コメント: 山田");
+}
+
+#[test]
+fn hidden_directories_are_skipped_and_max_depth_applies() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("docs");
+    for name in [
+        "a.docx",
+        ".git/x.docx",
+        ".hidden/b.docx",
+        "sub/c.docx",
+        "sub/deep/d.docx",
+    ] {
+        DocxBuilder::new().body(&p("サーバ")).write(&root, name);
+    }
+    let files = |extra: &[&str]| {
+        let out = stdout_of(
+            docgrep(dir.path())
+                .arg("-l")
+                .args(extra)
+                .args(["サーバ", "docs"]),
+        );
+        out.lines()
+            .map(|l| l.replace('\\', "/"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        files(&[]),
+        ["docs/a.docx", "docs/sub/c.docx", "docs/sub/deep/d.docx"]
+    );
+    assert_eq!(files(&["--max-depth", "1"]), ["docs/a.docx"]);
+    assert_eq!(
+        files(&["--max-depth", "2"]),
+        ["docs/a.docx", "docs/sub/c.docx"]
+    );
+    // A hidden directory given explicitly is searched.
+    let out = stdout_of(docgrep(dir.path()).args(["-l", "サーバ", "docs/.hidden"]));
+    assert_eq!(out.replace('\\', "/"), "docs/.hidden/b.docx\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_are_not_followed_during_walk() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other");
+    DocxBuilder::new()
+        .body(&p("サーバ"))
+        .write(&other, "x.docx");
+    let docs = dir.path().join("docs");
+    DocxBuilder::new().body(&p("サーバ")).write(&docs, "a.docx");
+    std::os::unix::fs::symlink(&other, docs.join("link")).unwrap();
+    std::os::unix::fs::symlink(other.join("x.docx"), docs.join("y.docx")).unwrap();
+    docgrep(dir.path())
+        .args(["-l", "サーバ", "docs"])
+        .assert()
+        .stdout("docs/a.docx\n");
+    // Given explicitly, a symlinked file is searched.
+    docgrep(dir.path())
+        .args(["-l", "サーバ", "docs/y.docx"])
+        .assert()
+        .stdout("docs/y.docx\n");
+}
+
+#[test]
+fn parallel_output_keeps_argument_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("docs");
+    for i in 0..40 {
+        // Larger files first so that later ones tend to finish earlier.
+        let body = p("サーバ").repeat(if i < 5 { 3000 } else { 1 });
+        DocxBuilder::new()
+            .body(&body)
+            .write(&docs, &format!("f{i:02}.docx"));
+    }
+    common::write_bytes(&docs, "f20_壊れ.docx", b"x");
+    let run = |j: &str| {
+        let out = docgrep(dir.path())
+            .args(["-c", "-j", j, "サーバ", "docs"])
+            .output()
+            .unwrap();
+        (
+            String::from_utf8(out.stdout).unwrap(),
+            String::from_utf8(out.stderr).unwrap(),
+            out.status.code(),
+        )
+    };
+    let sequential = run("1");
+    assert_eq!(sequential.2, Some(2));
+    assert!(sequential.1.contains("f20_壊れ.docx"));
+    for j in ["0", "4", "16"] {
+        assert_eq!(run(j), sequential, "-j {j}");
+    }
+    let names: Vec<_> = sequential
+        .0
+        .lines()
+        .map(|l| l.split(':').next().unwrap().to_string())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    assert_eq!(names.len(), 40);
+}
+
 // --- snapshots -------------------------------------------------------------------------
+
+#[test]
+fn snapshot_pretty_all_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    all_parts(dir.path(), "全部.docx");
+    insta::assert_snapshot!(stdout_of(docgrep(dir.path()).args([
+        "--color",
+        "never",
+        "サーバ",
+        "全部.docx"
+    ])));
+}
 
 #[test]
 fn snapshot_pretty_excel() {

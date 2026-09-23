@@ -10,7 +10,9 @@ anyhow = "1.0.104"
 calamine = "0.36.1"
 clap = { version = "4.6.7", features = ["derive"] }
 fancy-regex = "0.19.2"
+glob = "0.3.4"
 quick-xml = "0.42.0"
+rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.20"

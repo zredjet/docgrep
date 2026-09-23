@@ -98,7 +98,8 @@ fn write_location(w: &mut impl Write, loc: &Location, page: Option<u32>) -> io::
         None => write!(w, "{DIM}--{DIM:#}{}", pad("--", 4))?,
     }
 
-    let has_heading = !loc.part.is_page_less();
+    // Headers/footers have no heading; neither do notes whose reference was not found.
+    let has_heading = !(loc.part.is_page_less() || (loc.part.is_note() && page.is_none()));
     if has_heading {
         match &loc.heading {
             Some(h) => {

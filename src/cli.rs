@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use clap::error::{ContextKind, ErrorKind};
 use clap::{ArgAction, Parser, ValueEnum};
 
+use crate::model::Part;
+
 const HELP_TEMPLATE: &str = "\
 {about}
 
@@ -99,7 +101,7 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub max_depth: Option<usize>,
 
-    /// 並列数（既定: CPU 数）
+    /// 並列数（既定: CPU 数。0 も既定と同じ）
     #[arg(short = 'j', long, value_name = "N")]
     pub threads: Option<usize>,
 
@@ -141,6 +143,20 @@ impl PartSet {
         header: true,
         toc: true,
     };
+
+    /// Whether units of `part` are searched. Excel cells are always searched.
+    pub fn allows(&self, part: &Part) -> bool {
+        match part {
+            Part::Body => self.body,
+            Part::Table { .. } => self.table,
+            Part::TextBox => self.textbox,
+            Part::Toc => self.toc,
+            Part::Footnote { .. } | Part::Endnote { .. } => self.note,
+            Part::Comment { .. } => self.comment,
+            Part::Header | Part::Footer => self.header,
+            Part::Cell => true,
+        }
+    }
 
     const NONE: PartSet = PartSet {
         body: false,

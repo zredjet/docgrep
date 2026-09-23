@@ -10,6 +10,8 @@ pub enum FileError {
     Unsupported,
     #[error("ファイルが見つかりません")]
     NotFound,
+    #[error("ワイルドカードに一致するファイルがありません")]
+    NoGlobMatch,
     #[error("読み取れません: {0}")]
     Io(#[from] std::io::Error),
     #[error("zip として読めません: {0}")]
@@ -22,12 +24,17 @@ pub enum FileError {
     Xml { part: String, message: String },
     #[error("検索中にエラーが発生しました: {0}")]
     Search(String),
+    #[error("処理中に内部エラーが発生しました")]
+    Internal,
 }
 
 impl FileError {
     /// Warnings are reported but do not count as errors.
     pub fn is_warning(&self) -> bool {
-        matches!(self, FileError::EncryptedOrLegacy | FileError::Unsupported)
+        matches!(
+            self,
+            FileError::EncryptedOrLegacy | FileError::Unsupported | FileError::NoGlobMatch
+        )
     }
 }
 

@@ -45,34 +45,96 @@ fn is_ignored_file(path: &Path) -> bool {
 }
 
 /// Expands arguments in order. Directories are walked recursively in name order.
+///
+/// On Windows, arguments with `*` or `?` that are not existing paths are expanded
+/// here, because cmd.exe and PowerShell do not expand them for native programs.
 pub fn collect(paths: &[PathBuf], max_depth: Option<usize>) -> Vec<Item> {
     let mut items = Vec::new();
     for path in paths {
-        let display = path.display().to_string();
-        if path.is_dir() {
-            walk_dir(path, max_depth, &mut items);
-        } else if !path.exists() {
-            items.push(Item::Problem {
-                display,
-                error: FileError::NotFound,
-            });
-        } else if is_ignored_file(path) {
-            continue;
-        } else {
-            match kind_of(path) {
-                Some(kind) => items.push(Item::Target(Target {
-                    path: path.clone(),
-                    display,
-                    kind,
-                })),
-                None => items.push(Item::Problem {
-                    display,
-                    error: FileError::Unsupported,
-                }),
+        if cfg!(windows)
+            && let Some(pattern) = path.to_str()
+            && is_glob(pattern)
+            && !path.exists()
+        {
+            let matches = expand_glob(pattern);
+            if matches.is_empty() {
+                items.push(Item::Problem {
+                    display: pattern.to_string(),
+                    error: FileError::NoGlobMatch,
+                });
             }
+            for m in matches {
+                collect_one(&m, max_depth, &mut items);
+            }
+            continue;
         }
+        collect_one(path, max_depth, &mut items);
     }
     items
+}
+
+fn is_glob(arg: &str) -> bool {
+    arg.contains(['*', '?'])
+}
+
+/// Expands `*` and `?` (case-insensitively, as Windows does). `[` and `]` are taken
+/// literally, since they are common in Japanese file names. Results are sorted.
+pub fn expand_glob(pattern: &str) -> Vec<PathBuf> {
+    let escaped: String = pattern
+        .chars()
+        .map(|c| match c {
+            '[' => "[[]".to_string(),
+            ']' => "[]]".to_string(),
+            c => c.to_string(),
+        })
+        .collect();
+    let options = glob::MatchOptions {
+        case_sensitive: false,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let mut found: Vec<PathBuf> = match glob::glob_with(&escaped, options) {
+        Ok(paths) => paths.filter_map(Result::ok).collect(),
+        Err(_) => Vec::new(),
+    };
+    found.sort();
+    found
+}
+
+fn collect_one(path: &Path, max_depth: Option<usize>, items: &mut Vec<Item>) {
+    let display = path.display().to_string();
+    if path.is_dir() {
+        walk_dir(path, max_depth, items);
+    } else if !path.exists() {
+        items.push(Item::Problem {
+            display,
+            error: FileError::NotFound,
+        });
+    } else if is_ignored_file(path) {
+        // Lock files and AppleDouble files are skipped silently.
+    } else {
+        match kind_of(path) {
+            Some(kind) => items.push(Item::Target(Target {
+                path: path.to_path_buf(),
+                display,
+                kind,
+            })),
+            None => items.push(Item::Problem {
+                display,
+                error: FileError::Unsupported,
+            }),
+        }
+    }
+}
+
+/// Directories whose name starts with `.` are skipped (the root itself never is).
+fn is_hidden_dir(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() > 0
+        && entry.file_type().is_dir()
+        && entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with('.'))
 }
 
 fn walk_dir(root: &Path, max_depth: Option<usize>, items: &mut Vec<Item>) {
@@ -80,7 +142,7 @@ fn walk_dir(root: &Path, max_depth: Option<usize>, items: &mut Vec<Item>) {
     if let Some(depth) = max_depth {
         walker = walker.max_depth(depth);
     }
-    for entry in walker {
+    for entry in walker.into_iter().filter_entry(|e| !is_hidden_dir(e)) {
         match entry {
             Ok(entry) => {
                 if !entry.file_type().is_file() || is_ignored_file(entry.path()) {
@@ -138,6 +200,26 @@ mod tests {
         assert!(is_ignored_file(Path::new("dir/._仕様書.docx")));
         assert!(is_ignored_file(Path::new("dir/~$仕様書.docx")));
         assert!(!is_ignored_file(Path::new("dir/仕様書.docx")));
+    }
+
+    #[test]
+    fn glob_expansion() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.docx", "b.DOCX", "資料[最新]1.docx", "c.xlsx"] {
+            std::fs::write(dir.path().join(name), b"").unwrap();
+        }
+        let base = dir.path().display().to_string();
+        let names = |pattern: &str| -> Vec<String> {
+            expand_glob(&format!("{base}/{pattern}"))
+                .iter()
+                .filter_map(|p| p.file_name()?.to_str().map(str::to_string))
+                .collect()
+        };
+        assert_eq!(names("*.docx"), ["a.docx", "b.DOCX", "資料[最新]1.docx"]);
+        assert_eq!(names("?.xlsx"), ["c.xlsx"]);
+        assert_eq!(names("資料[最新]*.docx"), ["資料[最新]1.docx"]);
+        assert!(names("*.pdf").is_empty());
+        assert!(is_glob("*.docx") && is_glob("a?.docx") && !is_glob("a.docx"));
     }
 
     #[test]

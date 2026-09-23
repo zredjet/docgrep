@@ -13,7 +13,44 @@ use super::headings::{DocContext, HeadingTracker, ParaProps};
 use super::pages::{EXPLICIT, PageInfo, PageTracker, Pages, RENDERED};
 use super::xml::{MATH_STRICT, MATH_TRANSITIONAL, MC, is_w, on_off, w_attr};
 use crate::error::FileError;
-use crate::model::{Location, PageMode, Part, TextUnit};
+use crate::model::{Heading, Location, PageMode, Part, TextUnit};
+
+/// Which WordprocessingML part is being read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartKind {
+    Body,
+    Footnotes,
+    Endnotes,
+    Comments,
+    Header,
+    Footer,
+}
+
+/// Kind of a reference from the body to a note or comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RefKind {
+    Footnote,
+    Endnote,
+    Comment,
+}
+
+/// Where a footnote, endnote or comment is referenced in the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteRef {
+    pub kind: RefKind,
+    pub id: String,
+    pub page: u32,
+    pub heading: Option<Heading>,
+}
+
+/// A reference while the body is being read: pages for both modes.
+#[derive(Debug)]
+struct RefRecord {
+    kind: RefKind,
+    id: String,
+    pages: [u32; 2],
+    heading: Option<Heading>,
+}
 
 /// Elements we react to. Everything else is descended into transparently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +68,9 @@ enum Tag {
     Sym,
     FldChar,
     LastRenderedPageBreak,
+    /// `w:footnote` / `w:endnote` / `w:comment` in their own parts.
+    NoteContainer,
+    Reference(RefKind),
     /// Paragraph properties: skipped for text, but a paragraph's own `w:pPr` is read.
     PPr,
     /// `w:del` / `w:moveFrom`: text below is not part of the current revision.
@@ -62,6 +102,10 @@ fn classify(ns: &ResolveResult, local: &str) -> Tag {
             "sym" => Tag::Sym,
             "fldChar" => Tag::FldChar,
             "lastRenderedPageBreak" => Tag::LastRenderedPageBreak,
+            "footnote" | "endnote" | "comment" => Tag::NoteContainer,
+            "footnoteReference" => Tag::Reference(RefKind::Footnote),
+            "endnoteReference" => Tag::Reference(RefKind::Endnote),
+            "commentReference" => Tag::Reference(RefKind::Comment),
             "del" | "moveFrom" => Tag::Deleted,
             "txbxContent" => Tag::TxbxContent,
             "pPr" => Tag::PPr,
@@ -95,6 +139,7 @@ enum Frame {
     /// `w:tr` / `w:tc`; `true` when in the main story (they drive page tracking).
     Row(bool),
     Cell(bool),
+    Container,
     Text,
     Deleted,
     TextBox,
@@ -147,6 +192,8 @@ struct ParaBuilder {
     breaks: [Vec<usize>; 2],
     /// Text box paragraphs anchored in this paragraph, emitted after it.
     anchored: Vec<Unit>,
+    /// References (indexes into the extractor's list) that take this paragraph's heading.
+    refs: Vec<usize>,
 }
 
 /// An independent flow of text (the main body, or one text box).
@@ -160,6 +207,8 @@ struct Story {
     out: Vec<Unit>,
     /// Text boxes: pages (both modes) at the anchor position in the body.
     anchor_pages: Option<[u32; 2]>,
+    /// References made outside any paragraph of this story.
+    pending_refs: Vec<usize>,
 }
 
 impl Story {
@@ -171,6 +220,7 @@ impl Story {
             tables: Vec::new(),
             out: Vec::new(),
             anchor_pages,
+            pending_refs: Vec::new(),
         }
     }
 
@@ -195,6 +245,10 @@ impl Story {
 
 struct Extractor<'a> {
     ctx: &'a DocContext,
+    kind: PartKind,
+    /// The footnote / endnote / comment being read (notes and comments parts).
+    container: Option<Part>,
+    refs: Vec<RefRecord>,
     headings: HeadingTracker,
     /// Reading the current paragraph's own `w:pPr` (inside a skipped subtree).
     in_ppr: bool,
@@ -217,15 +271,30 @@ struct Extractor<'a> {
 /// Result of extracting one story part.
 pub struct PartText {
     pub units: Vec<TextUnit>,
-    pub page_mode: PageMode,
+    /// Page mode of the body; `None` for other parts.
+    pub page_mode: Option<PageMode>,
+    /// References to notes and comments found in the body.
+    pub refs: Vec<NoteRef>,
     /// Set when the XML broke midway; `units` holds paragraphs completed before that.
     pub error: Option<FileError>,
 }
 
-/// Extracts every paragraph of a WordprocessingML part (document.xml etc.) in document order.
-pub fn extract_part<R: BufRead>(reader: R, part_name: &str, ctx: &DocContext) -> PartText {
+/// Extracts every paragraph of a WordprocessingML part in document order.
+///
+/// Headings, pages and note references are only tracked for [`PartKind::Body`].
+/// In other parts every unit is labelled with the part itself (tables and text
+/// boxes included).
+pub fn extract_part<R: BufRead>(
+    reader: R,
+    part_name: &str,
+    ctx: &DocContext,
+    kind: PartKind,
+) -> PartText {
     let mut ex = Extractor {
         ctx,
+        kind,
+        container: None,
+        refs: Vec::new(),
         headings: HeadingTracker::default(),
         in_ppr: false,
         ppr_group: None,
@@ -325,6 +394,17 @@ pub fn extract_part<R: BufRead>(reader: R, part_name: &str, ctx: &DocContext) ->
         PageMode::Rendered => RENDERED,
         PageMode::Explicit => EXPLICIT,
     };
+    let refs = ex
+        .refs
+        .into_iter()
+        .map(|r| NoteRef {
+            kind: r.kind,
+            id: r.id,
+            page: r.pages.get(mode).copied().unwrap_or(1),
+            heading: r.heading,
+        })
+        .collect();
+    let body = kind == PartKind::Body;
     let units = ex
         .stories
         .into_iter()
@@ -343,7 +423,8 @@ pub fn extract_part<R: BufRead>(reader: R, part_name: &str, ctx: &DocContext) ->
         .collect();
     PartText {
         units,
-        page_mode,
+        page_mode: body.then_some(page_mode),
+        refs,
         error,
     }
 }
@@ -359,10 +440,14 @@ fn w_local<'n>(ns: &ResolveResult, local: &'n str) -> Option<&'n str> {
 /// The few attribute values we need, read with namespace resolution.
 #[derive(Debug, Default)]
 struct Attrs {
-    /// `w:type` (br) or `w:fldCharType` (fldChar).
+    /// `w:type` (br, footnote, endnote) or `w:fldCharType` (fldChar).
     kind: Option<String>,
     /// `w:char` (sym).
     char_code: Option<String>,
+    /// `w:id` (notes, comments and their references).
+    id: Option<String>,
+    /// `w:author` (comment).
+    author: Option<String>,
 }
 
 impl Attrs {
@@ -380,6 +465,16 @@ impl Attrs {
                 char_code: w_attr(reader, e, "char"),
                 ..Attrs::default()
             },
+            Tag::NoteContainer => Attrs {
+                kind: w_attr(reader, e, "type"),
+                id: w_attr(reader, e, "id"),
+                author: w_attr(reader, e, "author"),
+                ..Attrs::default()
+            },
+            Tag::Reference(_) => Attrs {
+                id: w_attr(reader, e, "id"),
+                ..Attrs::default()
+            },
             _ => Attrs::default(),
         }
     }
@@ -394,9 +489,10 @@ impl Extractor<'_> {
         self.deleted == 0 && self.stories.last().is_some_and(Story::fields_allow_text)
     }
 
-    /// Whether the current story is the main body (not a text box).
+    /// Whether we are in the main story of the body part (not a text box, not
+    /// another part). Pages, headings and table numbers are tracked only here.
     fn in_main(&self) -> bool {
-        self.stories.len() == 1
+        self.kind == PartKind::Body && self.stories.len() == 1
     }
 
     /// Sets up the current paragraph's start page. Called before its first content,
@@ -539,11 +635,7 @@ impl Extractor<'_> {
                 Frame::Paragraph
             }
             Tag::Tbl => {
-                let is_main = self
-                    .stories
-                    .last()
-                    .is_some_and(|s| s.kind == StoryKind::Main);
-                let index = if is_main {
+                let index = if self.in_main() {
                     self.table_counter += 1;
                     self.table_counter
                 } else {
@@ -596,6 +688,30 @@ impl Extractor<'_> {
             }
             Tag::Cr => {
                 self.push_char('\n');
+                Frame::Other
+            }
+            Tag::NoteContainer => {
+                // Separator "notes" hold only the separator line.
+                if matches!(
+                    attrs.kind.as_deref(),
+                    Some("separator" | "continuationSeparator" | "continuationNotice")
+                ) {
+                    return None;
+                }
+                let id = attrs.id.clone().unwrap_or_default();
+                self.container = match self.kind {
+                    PartKind::Footnotes => Some(Part::Footnote { id }),
+                    PartKind::Endnotes => Some(Part::Endnote { id }),
+                    PartKind::Comments => Some(Part::Comment {
+                        id,
+                        author: attrs.author.clone().unwrap_or_default(),
+                    }),
+                    _ => None,
+                };
+                Frame::Container
+            }
+            Tag::Reference(kind) => {
+                self.reference(kind, attrs.id.clone());
                 Frame::Other
             }
             Tag::LastRenderedPageBreak => {
@@ -691,6 +807,7 @@ impl Extractor<'_> {
                     self.pages.cell_end();
                 }
             }
+            Frame::Container => self.container = None,
             Frame::Text => self.in_text = false,
             Frame::Deleted => self.deleted = self.deleted.saturating_sub(1),
             Frame::TextBox => self.end_textbox(),
@@ -701,21 +818,80 @@ impl Extractor<'_> {
         }
     }
 
+    /// Records a footnote / endnote / comment reference in the body.
+    fn reference(&mut self, kind: RefKind, id: Option<String>) {
+        if self.kind != PartKind::Body {
+            return;
+        }
+        let Some(id) = id else { return };
+        let pages = if self.in_main() {
+            self.start_paragraph_pages();
+            self.pages.current()
+        } else {
+            match self.stories.last().and_then(|s| s.anchor_pages) {
+                Some(p) => p,
+                None => self.pages.current(),
+            }
+        };
+        let index = self.refs.len();
+        self.refs.push(RefRecord {
+            kind,
+            id,
+            pages,
+            heading: None,
+        });
+        if let Some(st) = self.stories.last_mut() {
+            match st.paras.last_mut() {
+                Some(para) => para.refs.push(index),
+                None => st.pending_refs.push(index),
+            }
+        }
+    }
+
+    /// Part of a paragraph that just ended in the current story.
+    fn paragraph_part(&self, st: &Story, props: &ParaProps) -> Option<Part> {
+        match self.kind {
+            PartKind::Header => Some(Part::Header),
+            PartKind::Footer => Some(Part::Footer),
+            PartKind::Footnotes | PartKind::Endnotes | PartKind::Comments => self.container.clone(),
+            PartKind::Body => {
+                let part = st.part();
+                let styles = &self.ctx.styles;
+                let toc = styles.is_toc(styles.effective_id(props.style.as_deref()));
+                Some(if part == Part::Body && toc {
+                    Part::Toc
+                } else {
+                    part
+                })
+            }
+        }
+    }
+
     fn end_paragraph(&mut self) {
         self.start_paragraph_pages();
         let ctx = self.ctx;
-        let Some(st) = self.stories.last_mut() else {
+        let in_main = self.in_main();
+        let Some(mut para) = self.stories.last_mut().and_then(|st| st.paras.pop()) else {
             return;
         };
-        let Some(mut para) = st.paras.pop() else {
+        let Some(st) = self.stories.last() else {
             return;
         };
-        let mut location = Location::new(st.part());
-        let pages = if st.kind == StoryKind::Main {
-            // Text boxes anchored here take the heading of their anchor paragraph.
+        let Some(part) = self.paragraph_part(st, &para.props) else {
+            // A paragraph outside any note or comment: nothing to label it with.
+            return;
+        };
+        let mut location = Location::new(part);
+        let pages = if in_main {
+            // Text boxes and references in this paragraph take its heading.
             let heading = self.headings.paragraph(ctx, &para.props, &para.text);
             for anchored in &mut para.anchored {
                 anchored.unit.location.heading = heading.clone();
+            }
+            for &i in &para.refs {
+                if let Some(r) = self.refs.get_mut(i) {
+                    r.heading = heading.clone();
+                }
             }
             location.heading = heading;
             let [rendered, explicit] = para.breaks;
@@ -736,7 +912,15 @@ impl Extractor<'_> {
                 },
             ])
         } else {
-            anchored_pages(st.anchor_pages)
+            if let Some(st) = self.stories.last_mut() {
+                st.pending_refs.append(&mut para.refs);
+            }
+            self.stories
+                .last()
+                .and_then(|st| anchored_pages(st.anchor_pages))
+        };
+        let Some(st) = self.stories.last_mut() else {
+            return;
         };
         st.out.push(Unit {
             unit: TextUnit::new(para.text, location),
@@ -754,18 +938,35 @@ impl Extractor<'_> {
             return;
         };
         let mut units = textbox.out;
+        let mut refs = textbox.pending_refs;
         // Unclosed paragraphs inside the text box are flushed as-is.
-        for para in textbox.paras {
-            units.push(Unit {
-                unit: TextUnit::new(para.text, Location::new(Part::TextBox)),
-                pages: anchored_pages(textbox.anchor_pages),
-            });
+        let part = match self.kind {
+            PartKind::Body => Some(Part::TextBox),
+            PartKind::Header => Some(Part::Header),
+            PartKind::Footer => Some(Part::Footer),
+            _ => self.container.clone(),
+        };
+        for mut para in textbox.paras {
+            if let Some(part) = part.clone() {
+                units.push(Unit {
+                    unit: TextUnit::new(para.text, Location::new(part)),
+                    pages: anchored_pages(textbox.anchor_pages),
+                });
+            }
             units.extend(para.anchored);
+            refs.append(&mut para.refs);
         }
+        // Text box content and references attach to the anchor paragraph.
         if let Some(parent) = self.story() {
             match parent.paras.last_mut() {
-                Some(anchor) => anchor.anchored.extend(units),
-                None => parent.out.extend(units),
+                Some(anchor) => {
+                    anchor.anchored.extend(units);
+                    anchor.refs.append(&mut refs);
+                }
+                None => {
+                    parent.out.extend(units);
+                    parent.pending_refs.append(&mut refs);
+                }
             }
         }
     }
