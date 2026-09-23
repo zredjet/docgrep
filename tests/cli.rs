@@ -342,8 +342,8 @@ fn json_lines_fields() {
     assert_eq!(first["format"], "word");
     assert_eq!(first["part"], "body");
     assert!(first["part_label"].is_null());
-    assert!(first["page"].is_null());
-    assert!(first["page_mode"].is_null());
+    assert_eq!(first["page"], 1);
+    assert_eq!(first["page_mode"], "explicit");
     assert!(first["heading"].is_null());
     assert!(first["sheet"].is_null());
     assert!(first["sheet_hidden"].is_null());
@@ -471,7 +471,62 @@ fn json_heading_fields() {
     assert_eq!(lines[4]["heading"]["number"], "2.2");
 }
 
+/// Rendered-mode document: page 2 starts in the middle of the second paragraph.
+fn with_pages(dir: &Path, name: &str) {
+    let lr = "<w:r><w:lastRenderedPageBreak/></w:r>";
+    let body = [
+        p("一頁目のサーバ"),
+        format!("<w:p>{}{lr}{}</w:p>", r("サーバA"), r("サーバB")),
+        p("二頁目のサーバ"),
+    ]
+    .concat();
+    DocxBuilder::new().body(&body).write(dir, name);
+}
+
+#[test]
+fn json_pages_in_rendered_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    with_pages(dir.path(), "頁.docx");
+    let out = stdout_of(docgrep(dir.path()).args(["--json", "サーバ", "頁.docx"]));
+    let pages: Vec<(serde_json::Value, serde_json::Value)> = out
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .map(|v| (v["page"].clone(), v["page_mode"].clone()))
+        .collect();
+    let expected: Vec<_> = [1, 1, 2, 2]
+        .iter()
+        .map(|&n| (serde_json::json!(n), serde_json::json!("rendered")))
+        .collect();
+    assert_eq!(pages, expected);
+}
+
+#[test]
+fn merged_entry_shows_page_of_first_match() {
+    let dir = tempfile::tempdir().unwrap();
+    with_pages(dir.path(), "頁.docx");
+    let out = stdout_of(docgrep(dir.path()).args(["--color", "never", "サーバ", "頁.docx"]));
+    // "サーバA" (page 1) and "サーバB" (page 2) are one entry; it shows page 1.
+    assert!(
+        out.contains("  p.1   (冒頭)\n        サーバAサーバB\n"),
+        "{out}"
+    );
+}
+
 // --- snapshots -------------------------------------------------------------------------
+
+#[test]
+fn snapshot_pretty_rendered_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    with_pages(dir.path(), "頁.docx");
+    insta::assert_snapshot!(stdout_of(docgrep(dir.path()).args([
+        "--color",
+        "never",
+        "-C",
+        "3",
+        "サーバ",
+        "頁.docx"
+    ])));
+}
 
 #[test]
 fn snapshot_pretty_headings() {

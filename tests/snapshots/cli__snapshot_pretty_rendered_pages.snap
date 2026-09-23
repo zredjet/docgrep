@@ -1,0 +1,11 @@
+---
+source: tests/cli.rs
+expression: "stdout_of(docgrep(dir.path()).args([\"--color\", \"never\", \"-C\", \"3\",\n\"サーバ\", \"頁.docx\"]))"
+---
+■ 頁.docx  4件  (ページ: Word保存時のレイアウト情報)
+  p.1   (冒頭)
+        …頁目のサーバ
+  p.1   (冒頭)
+        サーバAサーバB
+  p.2   (冒頭)
+        …頁目のサーバ

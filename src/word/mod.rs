@@ -4,6 +4,7 @@ pub mod extract;
 pub mod headings;
 pub mod numbering;
 pub mod package;
+pub mod pages;
 pub mod styles;
 pub mod xml;
 
@@ -48,7 +49,7 @@ pub fn extract(path: &Path) -> Result<Extracted, FileError> {
     errors.extend(body.error);
     Ok(Extracted {
         format: Format::Word,
-        page_mode: None,
+        page_mode: Some(body.page_mode),
         units: body.units,
         partial_error: errors.into_iter().next(),
     })

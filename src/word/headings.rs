@@ -11,6 +11,9 @@ pub struct ParaProps {
     pub outline_lvl: Option<u8>,
     pub num_id: Option<u32>,
     pub ilvl: Option<u8>,
+    pub page_break_before: Option<bool>,
+    /// The paragraph ends a section that starts the next one on a new page.
+    pub section_break: bool,
 }
 
 /// Styles and list definitions of a document.

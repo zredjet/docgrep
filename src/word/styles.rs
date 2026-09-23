@@ -19,6 +19,7 @@ pub struct Style {
     pub outline_lvl: Option<u8>,
     pub num_id: Option<u32>,
     pub ilvl: Option<u8>,
+    pub page_break_before: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -70,6 +71,11 @@ impl Styles {
                     ([.., Some("style"), Some("pPr")], "outlineLvl") => {
                         if let Some(s) = current.as_mut() {
                             s.outline_lvl = attr("val").and_then(|v| v.parse().ok());
+                        }
+                    }
+                    ([.., Some("style"), Some("pPr")], "pageBreakBefore") => {
+                        if let Some(s) = current.as_mut() {
+                            s.page_break_before = Some(xml::on_off(attr("val").as_deref()));
                         }
                     }
                     ([.., Some("style"), Some("pPr"), Some("numPr")], "numId") => {
@@ -142,6 +148,11 @@ impl Styles {
     /// `numId` from the style chain.
     pub fn num_id(&self, id: Option<&str>) -> Option<u32> {
         self.chain(id).iter().find_map(|s| s.num_id)
+    }
+
+    /// `pageBreakBefore` from the style chain.
+    pub fn page_break_before(&self, id: Option<&str>) -> Option<bool> {
+        self.chain(id).iter().find_map(|s| s.page_break_before)
     }
 
     /// `ilvl` from the style chain.

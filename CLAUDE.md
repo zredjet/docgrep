@@ -46,6 +46,7 @@ src/
     styles.rs      スタイルチェーン解決（outlineLvl、numPr）
     numbering.rs   numbering.xml、カウンタ、numFmt 書式化
     headings.rs    本文ストリームの見出し判定と章番号の追跡（HeadingTracker）
+    pages.rs       ページ推定（rendered / explicit の両モードを同時に追跡、表の行モデル）
     extract.rs     ストリーミング抽出 → TextUnit 列
   excel.rs         calamine で読み TextUnit 列にする
   output/
