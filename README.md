@@ -213,6 +213,14 @@ grep に慣れている方は、次の違いに注意してください。
   Windows Terminal の利用をおすすめします。
 - `■` `…` `↵` `①` などは、表示幅が環境によって 1 桁にも 2 桁にもなる文字です。そのため、見出しの切り詰め位置が少しずれることがあります。
 
+## ライセンス
+
+docgrep は [MIT ライセンス](LICENSE) で提供します。
+
+実行ファイルには、Rust のオープンソースライブラリ（MIT・Apache-2.0・BSD-3-Clause・Unicode-3.0・Zlib など）が含まれています。
+それらのライセンス本文は [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) にまとめてあり、配布する圧縮ファイルにも同梱します。
+実行ファイルだけを別の場所へコピーして配る場合も、`LICENSE` と `THIRD_PARTY_LICENSES.md` を一緒に渡してください。
+
 ## 開発
 
 仕様は [docs/SPEC.md](docs/SPEC.md) にあります。
@@ -223,6 +231,14 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
+
+- 依存クレートを追加・更新したら、サードパーティライセンスの一覧を作り直してください（[cargo-about](https://github.com/EmbarkStudios/cargo-about) を使います）。
+  許可していないライセンスのクレートが入ると、この生成が失敗します（許可リストは `about.toml`）。
+
+  ```sh
+  cargo install cargo-about --locked --features cli
+  cargo about generate --locked about.hbs -o THIRD_PARTY_LICENSES.md
+  ```
 
 - テスト用の docx は `tests/common` の `DocxBuilder` で XML 断片から生成します。xlsx は rust_xlsxwriter で生成します。
 - 表示はスナップショットテストで固定しています。表示を意図して変えたときは `INSTA_UPDATE=always cargo test`（または cargo-insta を入れて `cargo insta review`）で更新し、差分を確認してください。

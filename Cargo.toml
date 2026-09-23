@@ -5,6 +5,9 @@ edition = "2024"
 # let-chains in edition 2024
 rust-version = "1.88"
 description = "Exact-match search inside Word / Excel files from the console"
+license = "MIT"
+# Distributed as release binaries, not on crates.io.
+publish = false
 readme = "README.md"
 keywords = ["grep", "docx", "xlsx", "search", "japanese"]
 categories = ["command-line-utilities", "text-processing"]

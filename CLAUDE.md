@@ -17,6 +17,8 @@ Word / Excel ファイルの中身をコンソールから **厳密一致** で�
 - 外部コマンド（Word、LibreOffice、pandoc 等）を呼ばない。純 Rust で完結させる。
 - ユーザー向けメッセージと `--help` は日本語。コード・識別子・コメント・コミットメッセージは英語。
 - クレートは `cargo add` で最新安定版を入れる。API は記憶で書かず docs.rs で確認してから使う。
+- 依存を追加・更新したら `cargo about generate --locked about.hbs -o THIRD_PARTY_LICENSES.md` で
+  サードパーティライセンス一覧を再生成してコミットする。`about.toml` の許可リストに無いライセンスは、勝手に追加せずユーザーに確認する。
 
 ## コマンド
 

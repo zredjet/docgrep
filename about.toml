@@ -1,0 +1,25 @@
+# cargo-about configuration: generates THIRD_PARTY_LICENSES.md
+#   cargo about generate --locked about.hbs -o THIRD_PARTY_LICENSES.md
+#
+# Only licenses listed here may appear in shipped dependencies; generation
+# fails otherwise, so a new dependency with another license is caught.
+# Order matters: for dual-licensed crates the first accepted license is used.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# Platforms we ship binaries for.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+ignore-build-dependencies = true
+# docgrep itself is not third-party (it is unpublished, see Cargo.toml).
+private = { ignore = true }
+ignore-dev-dependencies = true

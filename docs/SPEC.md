@@ -600,3 +600,9 @@ P6 で決めたもの:
 - 2026-09-23 anyhow は使う場面が無かったため依存から外した（エラーは thiserror の FileError で表す）。
 - 2026-09-23 rust-version は 1.88（edition 2024 の let-chains と、calamine・zip の要求に合わせる）。
 - 2026-09-23 help は1オプション1行に収め、`--parts` の値の一覧・grep との違い（C9）・ページ表示の意味は末尾の補足に書く。help の文面はスナップショットで固定する。
+
+ライセンス:
+- 2026-09-23 docgrep は MIT ライセンス（LICENSE、Cargo.toml の license）。crates.io には公開しない（publish = false）。
+- 2026-09-23 同梱する依存クレートのライセンス本文は cargo-about で THIRD_PARTY_LICENSES.md に生成してリポジトリに置き、リリースの圧縮ファイルに LICENSE・README.md と一緒に同梱する。
+  対象は配布する4プラットフォーム（macOS arm64/x64、Windows x64/arm64）の通常依存。デュアルライセンスは MIT を優先して選ぶ。
+  許可するライセンスは about.toml の accepted（MIT、Apache-2.0、BSD-3-Clause、Unicode-3.0、Unlicense、Zlib）。CI で一覧が最新かを確認する。
